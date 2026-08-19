@@ -116,14 +116,48 @@ One question in, one Markdown file out. Two stages, both in the background:
      content-script action exists, and the research path never calls
      `ensureContentScriptLoaded`.
 
+   The background fetch is **credential-less** (`credentials: 'omit'`). Host
+   access here means "read any site from the background", and attaching the
+   cookie jar would turn that into reading the user's logged-in copy of
+   whatever a result — or its redirect chain — points at, into a document that
+   is about to be pasted into an LLM. A page that genuinely needs the session
+   is not lost: it comes back walled, thin or non-2xx and escalates to a tab,
+   where the session applies in the user's own window and the user can see it.
+
+   Two guards sit around the fetch, and both are **rejections** rather than
+   escalations, because a tab would perform the same request:
+
+   * **Destination** — `privateDestinationReason` refuses `localhost`,
+     `*.local`, `*.internal`, `*.home.arpa`, a hostname with no dot, any
+     non-`http(s)` scheme, and IP literals in 0/8, 10/8, 127/8, 169.254/16,
+     172.16/12, 192.168/16, 100.64/10, 224/4, `::1`, `::`, fc00::/7 and
+     fe80::/10 (including IPv4-mapped forms). It runs on the requested URL for
+     **both** paths, and again on the final URL after redirects. What it cannot
+     see is stated in the code rather than implied: `fetch` never exposes
+     intermediate hops (`redirect: 'manual'` yields an opaque response), so a
+     chain passing *through* a private host still performs that GET, and a
+     public name resolving to a private address (DNS rebinding, or an A record
+     pointing at 10.x) passes. Closing either needs declarativeNetRequest rules
+     scoped to the run.
+   * **Size** — `MAX_BYTES` (5 MiB). `content-length` short-circuits the
+     obvious case; otherwise the body is read through the stream reader with a
+     running byte count and cancelled the moment it goes over. The 10 s timeout
+     bounded time, never bytes, and the whole body is held as a string and then
+     structured-cloned to the parser, three sources at a time.
+
    A source escalates from quiet to rendered on exactly these signals, in this
    order, each carrying its own verbatim reason: a network failure, an unusable
    content type, or a 404/410 is a **rejection** (a tab cannot help a PDF, it
    cannot conjure a page the site says is not there — it would only capture the
    site's error page and file it as a source — and the tab path's own habit of
    capturing Chrome's TLS interstitial as an article is worse than saying
-   "certificate has expired"); any other non-2xx status, a redirect onto a
-   consent/login host, an empty `#root`/`#__next`/`app-root` shell, a parse that
+   "certificate has expired"); a body the server never named as anything and
+   that does not open like markup is a rejection too, because a parser should
+   not be handed bytes on a guess; any other non-2xx status, a redirect onto a
+   consent/login **host or path** (a same-site hop to `/login` or `/subscribe`
+   is the same event as a hop to an SSO domain, and such a page is well over
+   the character floor, so nothing else would catch it), an empty
+   `#root`/`#__next`/`app-root` shell, a parse that
    failed, or fewer than 500 characters of Readability text is a **render**. The
    split inside non-2xx is the point: a 403, 429 or 503 is usually a bot check
    the user's own tab walks straight through, while 404 and 410 are final.
@@ -132,7 +166,19 @@ One question in, one Markdown file out. Two stages, both in the background:
    subdomain of either, and any subdomain of `reddit.com`). `MIN_TEXT_CHARS` is
    a guard, not a preference: over 30 measured pages the worst junk page
    yielded 98 characters and the weakest genuine article 1385. Above the floor
-   but under 1500 characters the capture is kept *and* says how thin it was.
+   but under 1500 characters the capture is kept *and* says how thin it was —
+   in the document, and on the row, which ends `· thin` and carries the full
+   sentence in its hover text and `aria-label`. The sheet is what the user
+   reads before deciding the run went fine, so the caveat cannot live only in
+   the saved file.
+
+   Cancelling opens no tabs. `cancel()` aborts the run's controller and closes
+   its tabs, and deliberately leaves the offscreen parser alone — tearing it
+   down rejects the parses already in flight, a rejected parse is an escalation
+   signal, and the escalation would have opened a burst of tabs at the exact
+   moment the user asked for none. `execute()` closes it a moment later, once
+   the pool has drained. `fetchOne` re-checks `run.cancelled` between the quiet
+   capture and the tab, for the same reason.
 
    The parsing needs a DOM. Chrome MV3 has none in the worker, so it uses one
    offscreen document (`offscreen.html`, reason `DOM_PARSER`) for the whole run,
@@ -145,7 +191,17 @@ One question in, one Markdown file out. Two stages, both in the background:
    honour `permissions.request` inside a user gesture, and the result hosts are
    unknown until discovery has run, so a per-host request afterwards is
    impossible. Denial is not a failure: the run falls back to a tab per source,
-   which needs no host permission, and says so once at run level.
+   which needs no host permission, and says so once at run level. "No access"
+   is not one answer, so it is not reported as one: a decline, a browser with
+   no optional-origin API (`optional_host_permissions` is Firefox 116+, and the
+   package's `strict_min_version` is 109), and a `request` that threw each
+   carry their own sentence from the popup into the run's capture note. The
+   engine does not simply believe the flag either — it re-checks with
+   `permissions.contains` before choosing the quiet path, so a stale or forged
+   flag cannot make the background attempt fetches it is not allowed to make.
+   The grant is not released when the run ends: auto-revoking would re-prompt
+   on every run, and a permanent grant with a visible control to hand it back
+   is a settings-level change, not part of this path.
 
    `researchCapture` (`'quiet'` / `'render'`) lets the user force the tab path.
    Its control is a radio pair in the Settings view, with the other
@@ -159,7 +215,11 @@ DuckDuckGo instead.
 
 Research always forces `triggerLazyLoading: false` — a background tab is never
 rendered and the quiet path has no tab at all, so a scroll pass would spend the
-budget and change nothing. Every rendered source says so, in its row in the
+budget and change nothing. It also forces `contentScope` to `mainContent`
+unless the user saved `fullPage`: a research source is neither a selection nor
+a conversation, and a saved `selection` scope would make every capture throw
+"No text is selected", on both paths, so a whole run would cost eight fetches
+plus eight tabs and produce nothing. Every rendered source says so, in its row in the
 popup and in a `Note:` line in the document; every quiet source says it was
 captured from the server-rendered HTML instead. X hosts carry a second note
 about virtualised timelines. Each entry carries `path` (`quiet` / `rendered`)
@@ -171,6 +231,32 @@ The mark is spring-driven (`PRESETS.snappy`) out of the host it belongs to,
 cross-fades instead under `prefers-reduced-motion`, and the row's `aria-label`
 names the path either way.
 
+The document is written to be read by a model, so a source cannot be allowed to
+write structure into it. Titles come from the fetched page's own `<title>`: they
+are flattened to one line, their Markdown punctuation escaped and their length
+bounded before they reach a `## N.` header or a link text, link targets are
+emitted in the `<…>` form with the characters that could close them
+percent-encoded, and every reason, note and raw URL in `### Not fetched` is
+flattened the same way. A body is not fenced — Readability output legitimately
+contains headings and rules, so fencing would change every real capture to buy
+nothing the section numbering does not already give.
+
+Token counts always come from `ScrapLLMConvert.estimateTokens`, including for a
+`text/plain` or `text/markdown` source that skips the converter entirely; the
+Chrome worker has no `ScrapLLMConvert`, so it asks the offscreen document
+(`estimateTokens` action). A second formula would put a number in the front
+matter that disagrees with the sources it sums.
+
+Per-source code is passed its own `run` and never reads the module-level
+`state`: `persistState(run, extra)` and `waitForScriptable(run, …)` take it as
+an argument, and `cancel()` captures it once. `state` is only the *current* run,
+and a worker still finishing an earlier one would otherwise write that run's
+tabs into the new run's record — where orphan recovery would never find them.
+`recoverOrphans()` closes the offscreen document *before* it reads the persisted
+state, because when `storage.session` is unavailable that state lived in a
+module variable that died with the worker, and the orphaned document is exactly
+what has to be closed in that case.
+
 | Constant | Value |
 |----------|-------|
 | `RESEARCH_CONCURRENCY` | 3 (the multi-tab path keeps 4) |
@@ -179,6 +265,7 @@ names the path either way.
 | `SEARCH_TIMEOUT_MS` / `TOTAL_BUDGET_MS` | 10000 / 240000 |
 | `FETCH_TIMEOUT_MS` / `PARSE_TIMEOUT_MS` | 10000 / 5000 |
 | `MIN_TEXT_CHARS` / `QUIET_THIN_CHARS` | 500 / 1500 |
+| `MAX_BYTES` (one fetched body) | 5242880 |
 | `PROGRESS_THROTTLE_MS` / `RESULT_RETENTION_MS` | 250 / 600000 |
 | `MAX_PERSIST_BYTES` | 5242880 |
 
@@ -214,7 +301,7 @@ length of a run.
 
 | Direction | Message |
 |-----------|---------|
-| popup → background | `start {query, sourceCount, settings, hostAccess}`, `cancel {runId}`, `sync {}`, `getDocument {runId}` |
+| popup → background | `start {query, sourceCount, settings, hostAccess, hostAccessNote}`, `cancel {runId}`, `sync {}`, `getDocument {runId}` |
 | background → popup | `snapshot {snapshot}` (throttled to 250 ms, always flushed on a phase change), plus `accepted`, `document` and `error` replies |
 
 The snapshot is the whole UI state — phase, counts, per-source rows with their

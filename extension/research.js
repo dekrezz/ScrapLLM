@@ -171,7 +171,10 @@ const ScrapLLMResearch = (function() {
         // How this source was captured, and why it was not captured quietly.
         // The popup shows both; nothing about the path is inferred there.
         path: e.path || null,
-        pathReason: e.pathReason || null
+        pathReason: e.pathReason || null,
+        // A kept-but-thin quiet capture. The row says so too, so a 600
+        // character page cannot read like a whole article in the sheet.
+        thinNote: e.thinNote || null
       })),
       rejected: state.rejected
     };
@@ -265,14 +268,18 @@ const ScrapLLMResearch = (function() {
     }
   }
 
-  async function persistState(extra) {
-    if (!state) return;
+  // Always takes the run it is persisting. It used to read the module-level
+  // `state`, which is only the *current* run: a worker still finishing an
+  // earlier run would have written that run's tabs into the new run's record,
+  // and orphan recovery would then never close them.
+  async function persistState(run, extra) {
+    if (!run) return;
     const payload = Object.assign({
-      runId: state.runId,
-      phase: state.phase,
-      query: state.query,
-      openTabIds: Array.from(state.openTabIds),
-      entries: state.entries.map(e => ({
+      runId: run.runId,
+      phase: run.phase,
+      query: run.query,
+      openTabIds: Array.from(run.openTabIds),
+      entries: run.entries.map(e => ({
         url: e.url,
         host: e.host,
         title: e.title,
@@ -281,10 +288,11 @@ const ScrapLLMResearch = (function() {
         tokenCount: e.tokenCount || 0,
         notes: e.notes || [],
         path: e.path || null,
-        pathReason: e.pathReason || null
+        pathReason: e.pathReason || null,
+        thinNote: e.thinNote || null
       })),
-      expiresAt: state.expiresAt,
-      resultsTooLargeToPersist: state.resultsTooLargeToPersist
+      expiresAt: run.expiresAt,
+      resultsTooLargeToPersist: run.resultsTooLargeToPersist
     }, extra || {});
 
     const previous = await readPersisted();
@@ -408,6 +416,28 @@ const ScrapLLMResearch = (function() {
     return outcome;
   }
 
+  // A token count from the one shared estimator in convert-core, wherever that
+  // code happens to live in this browser. text/plain and text/markdown sources
+  // skip the converter entirely, and a second formula here would put a number
+  // in the front matter that does not match the sources it sums.
+  async function estimateTokensFor(markdown) {
+    if (!markdown) return 0;
+    if (canParseLocally()) return ScrapLLMConvert.estimateTokens(markdown);
+    if (!hasOffscreenApi()) {
+      throw new Error('this browser exposes neither DOMParser nor an offscreen document');
+    }
+    await ensureOffscreen();
+    const response = await api.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      action: 'estimateTokens',
+      markdown
+    });
+    if (!response || !response.success) {
+      throw new Error((response && response.error) || 'the parser did not answer');
+    }
+    return response.tokenCount;
+  }
+
   // --------------------------------------------------------------------------
   // Tab plumbing
   // --------------------------------------------------------------------------
@@ -448,11 +478,14 @@ const ScrapLLMResearch = (function() {
   // Wait for the declaratively injected content script to answer. The load
   // event is deliberately not used: a script-heavy page can answer a ping long
   // before `complete`, and a stalled subresource can hold `complete` forever.
-  async function waitForScriptable(tabId, url, deadlineAt) {
+  // The run is passed in rather than read from the module: a tab belonging to
+  // an earlier run must watch *that* run's cancelled flag, not the flag of
+  // whichever run happens to be current.
+  async function waitForScriptable(run, tabId, url, deadlineAt) {
     const limit = Math.min(Date.now() + PAGE_LOAD_TIMEOUT_MS, deadlineAt);
 
     while (Date.now() < limit) {
-      if (state && state.cancelled) throw new Error(CANCELLED_MESSAGE);
+      if (run && run.cancelled) throw new Error(CANCELLED_MESSAGE);
 
       try {
         const response = await api.tabs.sendMessage(tabId, { action: 'ping' });
@@ -520,7 +553,13 @@ const ScrapLLMResearch = (function() {
   //   { outcome: 'render', reason }    hand this source to the tab path
   async function captureQuietly(source, entry, run) {
     const preflight = ScrapLLMQuietCapture.preflight(source.url, run.remoteSettings);
-    if (preflight) return { outcome: 'render', reason: preflight.reason };
+    if (preflight) {
+      // Preflight can also refuse outright — a private address is not a page a
+      // tab could capture any more safely than a fetch could.
+      return preflight.decision === 'reject'
+        ? { outcome: 'rejected', message: preflight.reason }
+        : { outcome: 'render', reason: preflight.reason };
+    }
 
     const response = await ScrapLLMQuietCapture.fetchSource(source.url, {
       signal: run.controller.signal
@@ -542,7 +581,9 @@ const ScrapLLMResearch = (function() {
       // nothing to add and would only throw the body away.
       markdown = response.text;
       textLength = response.text.trim().length;
-      tokenCount = markdown.length ? Math.ceil(markdown.length / 4) : 0;
+      // The same estimator every other capture uses, so one plaintext source
+      // cannot make the document's own token total disagree with itself.
+      tokenCount = await estimateTokensFor(markdown);
       if (textLength < ScrapLLMQuietCapture.MIN_TEXT_CHARS) {
         return {
           outcome: 'render',
@@ -571,12 +612,15 @@ const ScrapLLMResearch = (function() {
 
     const notes = [QUIET_NOTE];
     // Requirement of rule 3: a thin capture is never passed off as a whole
-    // page. It is above the floor, so it is kept — and it says how thin it is.
+    // page. It is above the floor, so it is kept — and it says how thin it is,
+    // in the document *and* on the row, because the sheet is what the user
+    // reads before deciding the run went fine.
+    let thinNote = null;
     if (textLength < QUIET_THIN_CHARS) {
-      notes.push(
+      thinNote =
         `Only ${textLength} characters of article text were in the server-rendered HTML, ` +
-        'so this page may carry more content behind JavaScript'
-      );
+        'so this page may carry more content behind JavaScript';
+      notes.push(thinNote);
     }
 
     entry.title = title;
@@ -584,7 +628,12 @@ const ScrapLLMResearch = (function() {
     entry.notes = notes;
     entry.path = 'quiet';
     entry.pathReason = null;
-    markEntry(entry, 'ok', `${formatTokenNote(tokenCount)} · quiet`);
+    entry.thinNote = thinNote;
+    markEntry(
+      entry,
+      'ok',
+      `${formatTokenNote(tokenCount)} · quiet${thinNote ? ' · thin' : ''}`
+    );
     broadcast(false);
 
     return {
@@ -617,7 +666,7 @@ const ScrapLLMResearch = (function() {
       tab = await createTab(source.url, run.windowId);
 
       run.openTabIds.add(tab.id);
-      await persistState();
+      await persistState(run);
 
       try {
         await api.tabs.update(tab.id, { muted: true });
@@ -625,7 +674,7 @@ const ScrapLLMResearch = (function() {
         console.warn('Could not mute research tab', tab.id, error && error.message);
       }
 
-      await waitForScriptable(tab.id, source.url, run.deadline);
+      await waitForScriptable(run, tab.id, source.url, run.deadline);
       await sleep(SETTLE_DELAY_MS);
 
       let timeoutId = null;
@@ -704,7 +753,7 @@ const ScrapLLMResearch = (function() {
       if (tab) {
         await removeTab(tab.id);
         run.openTabIds.delete(tab.id);
-        await persistState();
+        await persistState(run);
       }
     }
   }
@@ -726,6 +775,21 @@ const ScrapLLMResearch = (function() {
       markEntry(entry, 'skipped', BUDGET_MESSAGE);
       broadcast(false);
       return skipResult(source, BUDGET_MESSAGE);
+    }
+
+    // Both paths, not just the quiet one: a URL naming the user's own machine
+    // or LAN is not captured at all, and opening it in a tab would perform the
+    // same request with the user's session attached.
+    const blocked = ScrapLLMQuietCapture.privateDestinationReason(source.url);
+    if (blocked) {
+      markEntry(entry, 'error', blocked);
+      broadcast(false);
+      return {
+        success: false,
+        tab: { id: null, url: source.url, title: source.title || source.url },
+        error: blocked,
+        notes: []
+      };
     }
 
     markEntry(entry, 'fetching', 'Fetching');
@@ -765,6 +829,17 @@ const ScrapLLMResearch = (function() {
         };
       }
 
+      // Cancellation is checked again here, not only at the top of this
+      // function: the quiet capture was awaiting a fetch or a parse while the
+      // user pressed Cancel, and an escalation decided in that window would
+      // open a tab *because* the run was being torn down.
+      if (run.cancelled) {
+        markEntry(entry, 'skipped', CANCELLED_MESSAGE);
+        entry.path = 'quiet';
+        broadcast(false);
+        return skipResult(source, CANCELLED_MESSAGE);
+      }
+
       escalationReason = quiet.reason;
       entry.pathReason = escalationReason;
       markEntry(entry, 'fetching', 'Opening a tab');
@@ -778,6 +853,36 @@ const ScrapLLMResearch = (function() {
   // --------------------------------------------------------------------------
   // Document builder
   // --------------------------------------------------------------------------
+
+  // A source's title comes from the page it was fetched from, and a hostile or
+  // merely sloppy page can put a newline, a bracket or a whole '## 3. …' line
+  // in it. The document is written to be read by a model, where a forged header
+  // or a forged 'Source:' line is a claim about provenance — so titles are
+  // flattened to one line, their Markdown punctuation escaped, and their length
+  // bounded before they are interpolated anywhere.
+  function safeTitle(title, fallback) {
+    const flat = String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
+    const text = flat || String(fallback || '');
+    return text.replace(/([\\[\]`*_])/g, '\\$1').slice(0, 200);
+  }
+
+  // A URL may legally contain parentheses, and one closing bracket is enough to
+  // end a Markdown link early and let the rest of the string pose as document
+  // text. The angle-bracket form plus percent-encoding of the characters that
+  // could close it removes the question.
+  function safeLinkTarget(url) {
+    // Encoded by hand: encodeURIComponent leaves ( and ) alone, and those are
+    // exactly the two characters that would end the link early.
+    return '<' + String(url == null ? '' : url)
+      .replace(/[\s<>()\\]/g, ch => '%' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')) +
+      '>';
+  }
+
+  // Reasons and raw URLs land in list items, where a newline would break out of
+  // the item and start document-level text.
+  function safeInline(text) {
+    return String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  }
 
   function buildFilename(query) {
     const slug = MultiTabUtils.sanitizeFilename(query).slice(0, QUERY_SLUG_MAX) || query;
@@ -823,8 +928,10 @@ const ScrapLLMResearch = (function() {
 
     const sourceList = ['## Sources'];
     successes.forEach((item, index) => {
-      const title = item.result.tab.title || item.source.title || item.result.tab.url;
-      sourceList.push(`${index + 1}. [${title}](${item.result.tab.url}) — ${item.source.host}`);
+      const title = safeTitle(item.result.tab.title || item.source.title, item.result.tab.url);
+      sourceList.push(
+        `${index + 1}. [${title}](${safeLinkTarget(item.result.tab.url)}) — ${safeInline(item.source.host)}`
+      );
     });
     if (successes.length === 0) {
       sourceList.push('_No source could be captured._');
@@ -837,24 +944,26 @@ const ScrapLLMResearch = (function() {
       sourceList.push('### Not fetched');
       sourceList.push('');
       failures.forEach(failure => {
-        sourceList.push(`- ${failure.url} — ${failure.reason}`);
+        sourceList.push(`- ${safeInline(failure.url)} — ${safeInline(failure.reason)}`);
       });
       run.rejected.forEach(candidate => {
-        sourceList.push(`- ${candidate.url} — ${candidate.reason} (skipped before fetching)`);
+        sourceList.push(
+          `- ${safeInline(candidate.url)} — ${safeInline(candidate.reason)} (skipped before fetching)`
+        );
       });
     }
 
     const sections = successes.map((item, index) => {
-      const title = item.result.tab.title || item.source.title || item.result.tab.url;
+      const title = safeTitle(item.result.tab.title || item.source.title, item.result.tab.url);
       const header = [
         `## ${index + 1}. ${title}`,
-        `Source: ${item.result.tab.url}`,
+        `Source: ${safeInline(item.result.tab.url)}`,
         `Fetched: ${item.result.fetchedAt}`,
         `Captured: ${item.result.path === 'quiet'
           ? 'server-rendered HTML, no tab'
           : 'rendered in a background tab'}`
       ];
-      (item.result.notes || []).forEach(note => header.push(`Note: ${note}`));
+      (item.result.notes || []).forEach(note => header.push(`Note: ${safeInline(note)}`));
       return header.join('\n') + '\n\n' + item.result.markdown;
     });
 
@@ -871,6 +980,25 @@ const ScrapLLMResearch = (function() {
   // --------------------------------------------------------------------------
   // Run lifecycle
   // --------------------------------------------------------------------------
+
+  // The same pattern the popup asks for. The popup's `hostAccess` flag says
+  // what the user answered; this says what the browser actually holds, and the
+  // background trusts the second one before it fetches anything.
+  const RESEARCH_ORIGINS = { origins: ['*://*/*'] };
+
+  async function hasHostAccess() {
+    if (!api.permissions || typeof api.permissions.contains !== 'function') {
+      // Nothing to check the claim against. The popup's answer stands, and a
+      // fetch that turns out not to be permitted fails loudly, per source.
+      return true;
+    }
+    try {
+      return await api.permissions.contains(RESEARCH_ORIGINS);
+    } catch (error) {
+      console.warn('Could not verify research site access:', (error && error.message) || error);
+      return true;
+    }
+  }
 
   async function currentWindowId() {
     try {
@@ -900,13 +1028,24 @@ const ScrapLLMResearch = (function() {
     // quiet path has no tab at all. A scroll pass would spend the budget and
     // change nothing, so it is forced off and reported on every source.
     settings.triggerLazyLoading = false;
+    // A research source is not a selection and not a conversation. The popup
+    // sends whatever scope the user has saved, and `selection` would make every
+    // capture throw "No text is selected" — on both paths, so a whole run would
+    // cost eight fetches plus eight tabs and produce nothing.
+    if (settings.contentScope !== 'fullPage') {
+      settings.contentScope = 'mainContent';
+    }
 
     // Quiet by default. Two things can send a whole run down the tab path: the
     // user asking for it, and the browser not granting the site access a
     // background fetch needs. Both say so once, at run level.
     // Absent means "no proof of access", not "assume access": only the popup
-    // can ask for the host permission, so only the popup can report it.
-    const hostAccess = !!(request && request.hostAccess === true);
+    // can ask for the host permission, so only the popup can report it — but
+    // the flag is a claim, and the background checks it against the permission
+    // the browser actually holds before fetching anything on its strength.
+    const claimedAccess = !!(request && request.hostAccess === true);
+    const grantedAccess = claimedAccess ? await hasHostAccess() : false;
+    const hostAccess = claimedAccess && grantedAccess;
     const wantsRender = settings.researchCapture === 'render';
     let strategy = 'quiet';
     let captureNote = null;
@@ -915,7 +1054,12 @@ const ScrapLLMResearch = (function() {
       captureNote = 'Every source was opened in a background tab because "Always render" is on';
     } else if (!hostAccess) {
       strategy = 'render';
-      captureNote = NO_HOST_ACCESS_NOTE;
+      // Why there is no site access is not always "you declined": the popup
+      // reports what it saw, and a granted-but-absent permission is a third
+      // answer again. Whichever it is, it is said in the user's words, once.
+      captureNote = claimedAccess
+        ? 'The browser granted site access but does not report holding it, so every source was opened in a background tab'
+        : ((request && request.hostAccessNote) || NO_HOST_ACCESS_NOTE);
     }
 
     const now = Date.now();
@@ -947,7 +1091,7 @@ const ScrapLLMResearch = (function() {
     state = run;
     lastDocument = null;
     broadcast(true);
-    await persistState();
+    await persistState(run);
 
     // Deliberately not awaited: `start` returns the run id immediately so the
     // popup can render, and progress arrives over the port.
@@ -956,7 +1100,7 @@ const ScrapLLMResearch = (function() {
       run.error = (error && error.message) || String(error);
       await closeOffscreen();
       broadcast(true);
-      await persistState();
+      await persistState(run);
     });
 
     return run.runId;
@@ -977,13 +1121,13 @@ const ScrapLLMResearch = (function() {
       if (run.cancelled) {
         run.phase = 'cancelled';
         broadcast(true);
-        await persistState();
+        await persistState(run);
         return;
       }
       run.phase = 'error';
       run.error = (error && error.message) || String(error);
       broadcast(true);
-      await persistState();
+      await persistState(run);
       return;
     }
     clearTimeout(searchTimer);
@@ -995,7 +1139,7 @@ const ScrapLLMResearch = (function() {
     if (!search.results.length) {
       run.phase = 'empty';
       broadcast(true);
-      await persistState();
+      await persistState(run);
       return;
     }
 
@@ -1011,7 +1155,7 @@ const ScrapLLMResearch = (function() {
     }));
     run.phase = 'running';
     broadcast(true);
-    await persistState();
+    await persistState(run);
 
     const results = await MultiTabUtils.runPool(
       run.sources,
@@ -1039,7 +1183,7 @@ const ScrapLLMResearch = (function() {
     const tooLarge = markdown.length > MAX_PERSIST_BYTES;
     run.resultsTooLargeToPersist = tooLarge;
 
-    await persistState(tooLarge ? { document: null } : { document: lastDocument });
+    await persistState(run, tooLarge ? { document: null } : { document: lastDocument });
     broadcast(true);
   }
 
@@ -1047,23 +1191,27 @@ const ScrapLLMResearch = (function() {
     if (!state || (runId && state.runId !== runId)) return;
     if (state.phase !== 'searching' && state.phase !== 'running') return;
 
-    state.cancelled = true;
+    // Captured once: everything below belongs to *this* run, whatever the
+    // module's current run becomes while the teardown is still in flight.
+    const run = state;
+    run.cancelled = true;
     try {
-      state.controller.abort();
+      run.controller.abort();
     } catch (e) {
       // An already-aborted controller is fine.
     }
 
-    // An in-flight quiet capture is stopped by the aborted controller above;
-    // the parser it may have been talking to is no longer needed either.
-    closeOffscreen();
+    // The offscreen parser is deliberately left alone. Tearing it down here
+    // rejects the parses already in flight, and a rejected parse is an
+    // escalation signal — cancelling would have opened a burst of tabs on a
+    // feature whose whole promise is that there are none. `execute` closes it
+    // once the pool has drained, which is a moment later and after the
+    // cancelled sources have already given up.
 
     // Removing a tab rejects its pending sendMessage, which is what actually
     // stops an in-flight conversion.
-    Array.from(state.openTabIds).forEach(tabId => {
-      removeTab(tabId).then(() => {
-        if (state) state.openTabIds.delete(tabId);
-      });
+    Array.from(run.openTabIds).forEach(tabId => {
+      removeTab(tabId).then(() => run.openTabIds.delete(tabId));
     });
 
     broadcast(true);
@@ -1107,6 +1255,14 @@ const ScrapLLMResearch = (function() {
     if (!api) return;
     if (state && (state.phase === 'searching' || state.phase === 'running')) return;
 
+    // First, and before the state is even read: a crashed worker can leave the
+    // offscreen parser open, an extension may only ever have one, and the run
+    // state is exactly what a crash may have taken with it — when
+    // storage.session is unavailable it lived in a module variable that died
+    // with the worker. Closing a document that does not exist is already a
+    // no-op inside closeOffscreen.
+    await closeOffscreen();
+
     const persisted = await readPersisted();
     if (!persisted) return;
 
@@ -1114,10 +1270,6 @@ const ScrapLLMResearch = (function() {
     for (const tabId of tabIds) {
       await removeTab(tabId);
     }
-
-    // A crashed worker can also leave the offscreen parser open, and an
-    // extension may only have one.
-    await closeOffscreen();
 
     lastSnapshot = Object.assign(idleSnapshot(), {
       runId: persisted.runId || null,

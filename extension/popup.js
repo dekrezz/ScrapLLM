@@ -1785,8 +1785,11 @@ function renderSourceRows(snapshot) {
     const spoken = isPath === "rendered"
       ? "rendered in a tab"
       : (isPath === "quiet" ? "read without a tab" : "");
-    note.title = entry.pathReason ? `${entry.note} — ${entry.pathReason}` : entry.note;
-    row.setAttribute("aria-label", [entry.host, entry.note, spoken, entry.pathReason]
+    // A thin quiet capture is kept, so the caveat travels with it: the note
+    // already ends in "· thin", and the hover text and the label say how thin.
+    const caveat = entry.pathReason || entry.thinNote || "";
+    note.title = caveat ? `${entry.note} — ${caveat}` : entry.note;
+    row.setAttribute("aria-label", [entry.host, entry.note, spoken, caveat]
       .filter(Boolean)
       .join(", "));
   });
@@ -1940,15 +1943,40 @@ function moveResearchFocus(snapshot, previous) {
 // browsers only honour permissions.request from inside a user-action handler,
 // and any await before it spends the gesture. Denial is not a failure — the
 // run falls back to a background tab per source, which needs no host access.
+//
+// Resolves with { granted, note }, because the ways this can end are not one
+// answer and must not read like one: the user declined, the browser has no
+// optional-origin API at all (Firefox honours optional_host_permissions only
+// from 116, and the package still supports 109), the request threw, or the run
+// was going to open tabs anyway. The note is what the run reports at run level.
 function requestResearchHostAccess() {
-  if (researchCaptureValue === "render") return Promise.resolve(false);
+  if (researchCaptureValue === "render") {
+    return Promise.resolve({ granted: false, note: null });
+  }
   if (!browserAPI.permissions || typeof browserAPI.permissions.request !== "function") {
-    return Promise.resolve(false);
+    return Promise.resolve({
+      granted: false,
+      note: "This browser does not offer optional site access, so every source was opened in a background tab"
+    });
   }
   try {
-    return browserAPI.permissions.request(RESEARCH_ORIGINS).catch(() => false);
+    return browserAPI.permissions.request(RESEARCH_ORIGINS).then(
+      (granted) => ({
+        granted: granted === true,
+        note: granted === true
+          ? null
+          : "Without site access, every source is opened in a background tab"
+      }),
+      (error) => ({
+        granted: false,
+        note: `Site access could not be requested (${error && error.message ? error.message : error}), so every source was opened in a background tab`
+      })
+    );
   } catch (error) {
-    return Promise.resolve(false);
+    return Promise.resolve({
+      granted: false,
+      note: `Site access could not be requested (${error && error.message ? error.message : error}), so every source was opened in a background tab`
+    });
   }
 }
 
@@ -1956,7 +1984,7 @@ async function startResearch() {
   const query = researchInput.value.trim();
   if (!query) return;
 
-  const hostAccess = await requestResearchHostAccess();
+  const access = await requestResearchHostAccess();
 
   researchLocalError = null;
   researchDeliveredRunId = null;
@@ -1982,7 +2010,8 @@ async function startResearch() {
     type: "start",
     query,
     sourceCount: researchSourceCountValue,
-    hostAccess,
+    hostAccess: access.granted,
+    hostAccessNote: access.note,
     settings: getCurrentSettings()
   });
 }

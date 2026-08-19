@@ -654,8 +654,12 @@ browserAPI.runtime.onConnect.addListener((port) => {
           sourceCount: message.sourceCount,
           settings: message.settings,
           // The popup is the only place that can ask for a host permission
-          // (the request must sit in a user gesture), so it reports the answer.
-          hostAccess: message.hostAccess
+          // (the request must sit in a user gesture), so it reports the answer
+          // and, when the answer is no, why — a denial, a browser without the
+          // API, and a request that threw are three different sentences. The
+          // engine checks the claim against the permission the browser holds.
+          hostAccess: message.hostAccess,
+          hostAccessNote: message.hostAccessNote
         });
         postToPort(port, { type: 'accepted', runId });
       } catch (error) {

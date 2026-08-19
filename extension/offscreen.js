@@ -30,6 +30,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  // A text/plain or text/markdown source never reaches the converter, but its
+  // token count still has to come from the same estimator as everything else.
+  if (message.action === 'estimateTokens') {
+    try {
+      sendResponse({ success: true, tokenCount: ScrapLLMConvert.estimateTokens(message.markdown) });
+    } catch (error) {
+      sendResponse({ success: false, error: (error && error.message) || String(error) });
+    }
+    return false;
+  }
+
   sendResponse({ success: false, error: `Unknown offscreen action: ${message.action}` });
   return false;
 });
