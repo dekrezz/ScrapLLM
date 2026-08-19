@@ -1181,6 +1181,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   xModeCheckbox.addEventListener("change", saveSettings);
   xIncludeRepliesCheckbox.addEventListener("change", saveSettings);
   xMaxPostsSelect.addEventListener("change", saveSettings);
+  researchCaptureRadios.forEach((radio) => {
+    radio.addEventListener("change", () => setResearchCapture(radio.value));
+  });
 
   // Metadata format settings
   includeMetadataCheckbox.addEventListener("change", () => {
@@ -1265,7 +1268,7 @@ const researchAlert = document.getElementById("researchAlert");
 const centerSection = document.querySelector(".center-section");
 
 const RESEARCH_PORT_NAME = "scrapllm-research";
-const researchCaptureSegments = document.getElementById("researchCaptureSegments");
+const researchCaptureRadios = document.querySelectorAll('input[name="researchCapture"]');
 const RESEARCH_SOURCE_COUNTS = [5, 8, 12];
 const RESEARCH_CAPTURE_MODES = ["quiet", "render"];
 // The quiet path fetches each source from the background, which needs access to
@@ -1287,6 +1290,7 @@ let lastSummaryAt = 0;
 let lastSummaryText = "";
 const documentRequests = [];
 const rowSprings = [];
+const pathSprings = [];
 
 function prefersReducedTransparency() {
   return typeof matchMedia === "function" &&
@@ -1476,34 +1480,15 @@ function setResearchSourceCount(value, options) {
   if (!options || options.persist !== false) saveSettings();
 }
 
+// The capture mode is a preference, not a per-run choice, so it lives in
+// Settings with the other radio groups rather than in the run sheet.
 function setResearchCapture(value, options) {
   const mode = RESEARCH_CAPTURE_MODES.includes(String(value)) ? String(value) : "quiet";
   researchCaptureValue = mode;
-  researchCaptureSegments.querySelectorAll(".segment-btn").forEach((btn) => {
-    const selected = btn.dataset.value === mode;
-    btn.classList.toggle("is-selected", selected);
-    btn.setAttribute("aria-checked", selected ? "true" : "false");
-    btn.tabIndex = selected ? 0 : -1;
+  researchCaptureRadios.forEach((radio) => {
+    radio.checked = radio.value === mode;
   });
   if (!options || options.persist !== false) saveSettings();
-}
-
-function initCaptureControl() {
-  const buttons = Array.from(researchCaptureSegments.querySelectorAll(".segment-btn"));
-
-  buttons.forEach((btn) => {
-    btn.addEventListener("click", () => setResearchCapture(btn.dataset.value));
-  });
-
-  researchCaptureSegments.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const index = buttons.findIndex((btn) => btn.dataset.value === researchCaptureValue);
-    const step = event.key === "ArrowRight" ? 1 : -1;
-    const next = buttons[(index + step + buttons.length) % buttons.length];
-    setResearchCapture(next.dataset.value);
-    next.focus();
-  });
 }
 
 function initSegmentedControl() {
@@ -1698,6 +1683,7 @@ function renderSourceRows(snapshot) {
   if (rebuild) {
     researchSources.textContent = "";
     rowSprings.length = 0;
+    pathSprings.length = 0;
     renderedRunKey = key;
 
     snapshot.entries.forEach((entry, index) => {
@@ -1715,7 +1701,18 @@ function renderSourceRows(snapshot) {
       title.className = "source-title";
       const host = document.createElement("span");
       host.className = "source-host";
-      text.append(title, host);
+      // The capture path is a property of the source, so it sits on the host
+      // line rather than in the status column. Only a source that needed a
+      // rendering engine says so: marking the common case on every row would
+      // be decoration, and the quiet path is what the run already promised.
+      const path = document.createElement("span");
+      path.className = "source-path";
+      path.setAttribute("aria-hidden", "true");
+      path.hidden = true;
+      const meta = document.createElement("span");
+      meta.className = "source-meta";
+      meta.append(host, path);
+      text.append(title, meta);
 
       const note = document.createElement("span");
       note.className = "source-note";
@@ -1734,6 +1731,20 @@ function renderSourceRows(snapshot) {
         }
       });
       rowSprings.push(spring);
+
+      // The mark arrives out of the host it belongs to, so it travels the few
+      // pixels from behind it rather than blinking into place.
+      pathSprings.push(new Motion.Spring(0, {
+        damping: Motion.PRESETS.snappy.damping,
+        response: Motion.PRESETS.snappy.response,
+        onUpdate: (value) => {
+          const shown = Motion.clamp(value, 0, 1);
+          path.style.opacity = String(shown);
+          path.style.transform = Motion.prefersReducedMotion()
+            ? "none"
+            : `translate3d(${(shown - 1) * 4}px, 0, 0)`;
+        }
+      }));
 
       if (!stagger || Motion.prefersReducedMotion()) {
         spring.set(1);
@@ -1755,11 +1766,29 @@ function renderSourceRows(snapshot) {
     note.textContent = entry.note;
     // How it was captured, and why it was not captured quietly, are on the row
     // itself rather than only in the finished document.
-    row.dataset.path = entry.path || "";
+    const wasPath = row.dataset.path || "";
+    const isPath = entry.path || "";
+    row.dataset.path = isPath;
+    if (isPath !== wasPath) {
+      const mark = row.querySelector(".source-path");
+      const pathSpring = pathSprings[index];
+      const rendered = isPath === "rendered";
+      mark.textContent = rendered ? "rendered" : "";
+      mark.hidden = !rendered;
+      if (rendered && !Motion.prefersReducedMotion()) {
+        pathSpring.to(1, Motion.PRESETS.snappy);
+      } else {
+        // Reduced motion cross-fades the mark in through CSS instead.
+        pathSpring.set(rendered ? 1 : 0);
+      }
+    }
+    const spoken = isPath === "rendered"
+      ? "rendered in a tab"
+      : (isPath === "quiet" ? "read without a tab" : "");
     note.title = entry.pathReason ? `${entry.note} — ${entry.pathReason}` : entry.note;
-    row.setAttribute("aria-label", entry.pathReason
-      ? `${entry.host}, ${entry.note}, ${entry.pathReason}`
-      : `${entry.host}, ${entry.note}`);
+    row.setAttribute("aria-label", [entry.host, entry.note, spoken, entry.pathReason]
+      .filter(Boolean)
+      .join(", "));
   });
 }
 
@@ -1935,6 +1964,7 @@ async function startResearch() {
   lastSummaryText = "";
   researchSources.textContent = "";
   rowSprings.length = 0;
+  pathSprings.length = 0;
   progressSpring.set(0);
   researchFill.style.transform = "scaleX(0)";
   researchPhase.textContent = "Finding sources…";
@@ -1987,7 +2017,6 @@ function resetResearch() {
 function initResearch() {
   researchPort = connectResearchPort();
   initSegmentedControl();
-  initCaptureControl();
   initSheetGesture();
   renderSheet(0);
   blockSprings.plan.set(1);

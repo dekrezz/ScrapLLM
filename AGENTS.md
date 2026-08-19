@@ -143,6 +143,9 @@ One question in, one Markdown file out. Two stages, both in the background:
    which needs no host permission, and says so once at run level.
 
    `researchCapture` (`'quiet'` / `'render'`) lets the user force the tab path.
+   Its control is a radio pair in the Settings view, with the other
+   preferences — it is a preference, not a per-run choice, so it does not sit
+   in the run sheet next to the source count.
 
 Brave Search was rejected as a fallback (rate limited after a handful of
 queries, build-hashed class names) and the Google News RSS recency booster was
@@ -156,7 +159,12 @@ popup and in a `Note:` line in the document; every quiet source says it was
 captured from the server-rendered HTML instead. X hosts carry a second note
 about virtualised timelines. Each entry carries `path` (`quiet` / `rendered`)
 and `pathReason` into the snapshot, the popup row and the document, and the
-document's front matter counts both.
+document's front matter counts both. In the row only a `rendered` source is
+marked, as `host · rendered` on the host line: quiet is what the run already
+promised, so marking every row would be decoration rather than information.
+The mark is spring-driven (`PRESETS.snappy`) out of the host it belongs to,
+cross-fades instead under `prefers-reduced-motion`, and the row's `aria-label`
+names the path either way.
 
 | Constant | Value |
 |----------|-------|

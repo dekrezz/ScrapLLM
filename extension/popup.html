@@ -193,16 +193,6 @@
                 <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="12">12</button>
               </div>
             </div>
-            <div class="research-plan-row">
-              <span class="research-plan-label">Capture</span>
-              <div id="researchCaptureSegments" class="research-segmented" role="radiogroup"
-                   aria-label="How each source is captured">
-                <button class="segment-btn is-selected" type="button" role="radio" aria-checked="true" tabindex="0" data-value="quiet"
-                        title="Read each page's HTML in the background, without opening a tab">Quiet</button>
-                <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="render"
-                        title="Open every source in a background tab, so its JavaScript runs">Always render</button>
-              </div>
-            </div>
             <div class="research-actions">
               <button id="researchStartBtn" class="primary-btn" type="button">Research &amp; Download</button>
             </div>
@@ -415,6 +405,21 @@ Source: [{title}]({url})</textarea>
               </label>
               <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
                 For pages with virtual scrolling (e.g., Gemini, ChatGPT), attempts to load more content before extraction. Off by default; turn on for chat interfaces.
+              </small>
+            </div>
+
+            <div class="setting-group">
+              <h3>Research</h3>
+              <label class="setting-option">
+                <input type="radio" name="researchCapture" value="quiet" checked />
+                <span>Read each source without opening a tab</span>
+              </label>
+              <label class="setting-option">
+                <input type="radio" name="researchCapture" value="render" />
+                <span>Always open each source in a background tab</span>
+              </label>
+              <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
+                Research fetches each source's HTML in the background and opens a tab only for pages that need one to render. Always rendering is slower and puts every source in the tab strip &mdash; use it if a site refuses the background fetch.
               </small>
             </div>
 

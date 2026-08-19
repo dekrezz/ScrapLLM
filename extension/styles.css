@@ -1584,6 +1584,38 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
 }
 
+/* The host and, when there is one, the capture mark share the second line:
+   proximity says the mark describes this source, not the run. */
+.source-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.source-meta .source-host {
+  min-width: 0;
+}
+
+/* Only a rendered source carries a mark; quiet is the promise the run already
+   made, so it stays silent. Same weight as the host — information, not a
+   badge. */
+.source-path {
+  flex: none;
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+  color: var(--label-tertiary);
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+
+.source-path::before {
+  content: "\00b7";
+  margin-right: 0.25rem;
+}
+
 .source-host,
 .source-note {
   font-size: 0.6875rem;
@@ -1729,6 +1761,13 @@ input[type="checkbox"] {
     transform: none !important;
   }
 
+  /* The capture mark cross-fades in place instead of travelling out of the
+     host name. */
+  .source-path {
+    transform: none !important;
+    transition: opacity 120ms ease;
+  }
+
   .source-row[data-state="fetching"] .source-glyph,
   .research-bar.is-running .research-glyph {
     animation: none;
@@ -1810,5 +1849,11 @@ input[type="checkbox"] {
   .research-field,
   .research-track {
     box-shadow: inset 0 0 0 1px var(--border-color);
+  }
+
+  /* The mark is the only thing on the row that is not a status, so it needs to
+     survive the higher-contrast palette rather than fade into the host. */
+  .source-path {
+    color: var(--label-secondary);
   }
 }
