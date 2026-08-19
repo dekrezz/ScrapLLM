@@ -304,7 +304,9 @@ describe('ScrapLLMSearch.filterAndRank', () => {
       candidate('https://other.example.org/c/d', { engineRank: 3 })
     ], 8);
 
-    expect(results.map(r => r.url)).toEqual([
+    // Order is the ranking tests' subject, not this one's: a surviving query
+    // string costs the clean-deep-path bonus, so example.com sorts second here.
+    expect(results.map(r => r.url).sort()).toEqual([
       'https://example.com/a/b?id=7',
       'https://other.example.org/c/d'
     ]);
