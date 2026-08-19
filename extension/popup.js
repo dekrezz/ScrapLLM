@@ -261,7 +261,9 @@ function initNavGestures() {
 
   Motion.draggable(mainView, {
     axis: "x",
-    canStart: (event) => navSpring.value < 0.5 && !event.target.closest("button, a, input, select, textarea"),
+    canStart: (event) => navSpring.value < 0.5 &&
+      !event.target.closest("button, a, input, select, textarea") &&
+      !event.target.closest(".research-sheet, .research-bar"),
     onStart: () => { startProgress = navSpring.value; },
     onMove: ({ delta }) => track(startProgress, -delta),
     onEnd: ({ delta, velocity, cancelled }) => {
@@ -482,6 +484,7 @@ async function loadSettings() {
     xModeCheckbox.checked = data.xMode !== false;
     xIncludeRepliesCheckbox.checked = data.xIncludeReplies !== false;
     xMaxPostsSelect.value = String(data.xMaxPosts);
+    setResearchSourceCount(data.researchSourceCount, { persist: false });
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
 
     // Show/hide metadata format container based on checkbox state
@@ -515,6 +518,7 @@ async function saveSettings() {
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
+    const researchSourceCount = researchSourceCountValue;
     const showTokenCount = showTokenCountCheckbox.checked;
     const tokenContextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
 
@@ -535,6 +539,7 @@ async function saveSettings() {
       xMode,
       xIncludeReplies,
       xMaxPosts,
+      researchSourceCount,
       showTokenCount,
       tokenContextLimit,
     });
@@ -640,11 +645,15 @@ function showMultiTabUI(count) {
   singleTabActions.classList.add('hidden');
   multiTabActions.classList.remove('hidden');
   selectedTabCount.textContent = count;
+  // Merging the selected tabs and researching the web are different tasks;
+  // offering both at once would be offering neither clearly.
+  researchBar.classList.add('hidden');
 }
 
 function showSingleTabUI() {
   singleTabActions.classList.remove('hidden');
   multiTabActions.classList.add('hidden');
+  researchBar.classList.remove('hidden');
 }
 
 // Progress callback for status updates
@@ -672,6 +681,7 @@ function getCurrentSettings() {
     xMode: xModeCheckbox.checked,
     xIncludeReplies: xIncludeRepliesCheckbox.checked,
     xMaxPosts: xMaxPostsSelect.value,
+    researchSourceCount: researchSourceCountValue,
   };
 }
 
@@ -1039,6 +1049,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   initTheme();
   updateShortcutDisplay();
+  initResearch();
   await loadSettings();
   initSelectionAction();
   initChatAction();
@@ -1191,6 +1202,803 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Review banner buttons
 });
+
+// ---------------------------------------------------------------------------
+// RESEARCH
+// ---------------------------------------------------------------------------
+// The run lives in background.js; this is only its face. The popup opens a
+// long-lived port, renders whatever snapshot arrives and sends four kinds of
+// message back — so closing the window never interrupts the work, and
+// reopening it re-attaches to the run already in flight.
+
+const researchScrim = document.getElementById("researchScrim");
+const researchBar = document.getElementById("researchBar");
+const researchInput = document.getElementById("researchInput");
+const researchBarNote = document.getElementById("researchBarNote");
+const researchGoBtn = document.getElementById("researchGoBtn");
+const researchSheet = document.getElementById("researchSheet");
+const researchSheetTitle = document.getElementById("researchSheetTitle");
+const researchCount = document.getElementById("researchCount");
+const researchPlan = document.getElementById("researchPlan");
+const researchSegments = document.getElementById("researchSegments");
+const researchStartBtn = document.getElementById("researchStartBtn");
+const researchRun = document.getElementById("researchRun");
+const researchPhase = researchRun.querySelector(".research-phase");
+const researchTrack = document.getElementById("researchTrack");
+const researchFill = researchRun.querySelector(".research-fill");
+const researchSources = document.getElementById("researchSources");
+const researchCancelBtn = document.getElementById("researchCancelBtn");
+const researchResult = document.getElementById("researchResult");
+const researchResultNote = researchResult.querySelector(".research-result-note");
+const researchFile = document.getElementById("researchFile");
+const researchTokens = document.getElementById("researchTokens");
+const researchSourcesMeta = document.getElementById("researchSourcesMeta");
+const researchFailedToggle = document.getElementById("researchFailedToggle");
+const researchFailedList = document.getElementById("researchFailedList");
+const researchCopyBtn = document.getElementById("researchCopyBtn");
+const researchAgainBtn = document.getElementById("researchAgainBtn");
+const researchError = document.getElementById("researchError");
+const researchErrorText = document.getElementById("researchErrorText");
+const researchRetryBtn = document.getElementById("researchRetryBtn");
+const researchEditBtn = document.getElementById("researchEditBtn");
+const researchSummary = document.getElementById("researchSummary");
+const researchAlert = document.getElementById("researchAlert");
+const centerSection = document.querySelector(".center-section");
+
+const RESEARCH_PORT_NAME = "scrapllm-research";
+const RESEARCH_SOURCE_COUNTS = [5, 8, 12];
+const SUMMARY_INTERVAL_MS = 1000;
+
+let researchSourceCountValue = 8;
+let researchPort = null;
+let researchSnapshot = null;
+let researchDeliveredRunId = null;
+let researchLocalError = null;
+let sheetTravel = 320;
+let renderedRunKey = "";
+let lastSummaryAt = 0;
+let lastSummaryText = "";
+const documentRequests = [];
+const rowSprings = [];
+
+function prefersReducedTransparency() {
+  return typeof matchMedia === "function" &&
+         matchMedia("(prefers-reduced-transparency: reduce)").matches;
+}
+
+// Springs -------------------------------------------------------------------
+// The sheet is a material arriving: it travels, scales and resolves out of a
+// blur together, so it reads as a surface rather than an opacity fade. Bounce
+// belongs here and nowhere else in this feature — this is the surface a
+// gesture can throw.
+
+const sheetSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.sheet.damping,
+  response: Motion.PRESETS.sheet.response,
+  onUpdate: (value) => renderSheet(value),
+  onRest: (spring) => {
+    if (spring.value <= 0.001) {
+      researchSheet.classList.add("hidden");
+      researchScrim.classList.add("hidden");
+      researchSheet.setAttribute("aria-hidden", "true");
+      researchInput.setAttribute("aria-expanded", "false");
+      mainView.classList.remove("research-open");
+      centerSection.inert = false;
+      centerSection.setAttribute("aria-hidden", "false");
+    }
+  }
+});
+
+function renderSheet(value) {
+  const reduced = Motion.prefersReducedMotion();
+  const flat = reduced || prefersReducedTransparency();
+
+  researchSheet.style.transform = reduced
+    ? "none"
+    : `translate3d(0, ${(1 - value) * sheetTravel}px, 0) scale(${0.96 + value * 0.04})`;
+  researchSheet.style.filter = flat || value > 0.99 ? "none" : `blur(${(1 - value) * 8}px)`;
+  researchSheet.style.opacity = reduced ? (value > 0.5 ? "1" : "0") : "1";
+  researchScrim.style.opacity = String(Motion.clamp(value, 0, 1));
+}
+
+// Progress never overshoots past a count that has not happened yet, so this
+// one is critically damped and only ever re-targeted upward within a run.
+const progressSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.move.damping,
+  response: Motion.PRESETS.move.response,
+  onUpdate: (value) => {
+    researchFill.style.transform = `scaleX(${Motion.clamp(value, 0, 1)})`;
+  }
+});
+
+const goSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.snappy.damping,
+  response: Motion.PRESETS.snappy.response,
+  onUpdate: (value) => {
+    researchGoBtn.style.transform = Motion.prefersReducedMotion()
+      ? "none"
+      : `scale(${0.6 + value * 0.4})`;
+    researchGoBtn.style.opacity = String(Motion.clamp(value, 0, 1));
+    researchGoBtn.style.pointerEvents = value > 0.5 ? "" : "none";
+  }
+});
+
+// The blocks cross in the same frame — the outgoing one leaves while the
+// incoming one arrives — because the sheet itself never moves between states.
+function makeBlockSpring(element) {
+  return new Motion.Spring(0, {
+    damping: Motion.PRESETS.snappy.damping,
+    response: Motion.PRESETS.snappy.response,
+    onUpdate: (value) => {
+      const reduced = Motion.prefersReducedMotion();
+      element.style.opacity = String(Motion.clamp(value * 1.4, 0, 1));
+      element.style.transform = reduced ? "none" : `scale(${0.96 + value * 0.04})`;
+      element.style.filter = reduced || value > 0.99 ? "none" : `blur(${(1 - value) * 6}px)`;
+    },
+    onRest: (spring) => {
+      if (spring.value <= 0.001) element.classList.add("hidden");
+    }
+  });
+}
+
+const blockSprings = {
+  plan: makeBlockSpring(researchPlan),
+  run: makeBlockSpring(researchRun),
+  result: makeBlockSpring(researchResult),
+  error: makeBlockSpring(researchError)
+};
+
+function showBlock(name) {
+  Object.keys(blockSprings).forEach((key) => {
+    const spring = blockSprings[key];
+    const element = { plan: researchPlan, run: researchRun, result: researchResult, error: researchError }[key];
+    if (key === name) {
+      element.classList.remove("hidden");
+      spring.to(1, Motion.PRESETS.snappy);
+    } else if (spring.target > 0) {
+      spring.to(0, Motion.PRESETS.snappy);
+    }
+  });
+}
+
+// Sheet presentation --------------------------------------------------------
+
+function isSheetOpen() {
+  return sheetSpring.target > 0.5;
+}
+
+function openSheet(options) {
+  const opts = options || {};
+  researchSheet.classList.remove("hidden");
+  researchScrim.classList.remove("hidden");
+  researchSheet.setAttribute("aria-hidden", "false");
+  researchInput.setAttribute("aria-expanded", "true");
+  mainView.classList.add("research-open");
+  centerSection.inert = true;
+  centerSection.setAttribute("aria-hidden", "true");
+  // Re-measured on every open: each state is a different height, and the
+  // travel distance is the sheet's own height, not a constant.
+  sheetTravel = researchSheet.offsetHeight || sheetTravel;
+  if (opts.immediate) {
+    sheetSpring.set(1);
+    renderSheet(1);
+  } else {
+    sheetSpring.to(1, Motion.PRESETS.sheet);
+  }
+}
+
+function closeSheet() {
+  if (!isSheetOpen()) return;
+  sheetSpring.to(0, Motion.PRESETS.sheet);
+  // The field raised the sheet, so the field gets the focus back.
+  researchInput.focus({ preventScroll: true });
+}
+
+function initSheetGesture() {
+  let startProgress = 1;
+
+  Motion.draggable(researchSheet, {
+    axis: "y",
+    threshold: 10,
+    canStart: (event) => isSheetOpen() &&
+      !event.target.closest("button, input, .research-sources, .research-failed-list"),
+    onStart: () => { startProgress = sheetSpring.value; },
+    onMove: ({ delta }) => trackSheet(startProgress, delta),
+    onEnd: ({ delta, velocity, cancelled }) => {
+      if (cancelled) { sheetSpring.to(startProgress, Motion.PRESETS.move); return; }
+      trackSheet(startProgress, delta);
+      settleSheet(sheetSpring.value, velocity);
+    }
+  });
+}
+
+function trackSheet(startProgress, deltaPx) {
+  // Dragging down (positive delta) pushes the sheet away.
+  let progress = startProgress - deltaPx / sheetTravel;
+  if (progress > 1) progress = 1 + Motion.rubberband(progress - 1, 1);
+  if (progress < 0) progress = 0;
+  sheetSpring.set(progress);
+  renderSheet(progress);
+}
+
+function settleSheet(progress, velocityPxPerSecond) {
+  const projectedPx = progress * sheetTravel - Motion.project(velocityPxPerSecond);
+  const projected = projectedPx / sheetTravel;
+  const decisive = Math.abs(velocityPxPerSecond) > 120;
+  const target = decisive ? (velocityPxPerSecond > 0 ? 0 : 1) : (projected > 0.5 ? 1 : 0);
+
+  sheetSpring.to(target, {
+    damping: Motion.PRESETS.sheet.damping,
+    response: Motion.PRESETS.sheet.response,
+    velocity: -velocityPxPerSecond / sheetTravel
+  });
+  if (target === 0) researchInput.focus({ preventScroll: true });
+}
+
+// Source count --------------------------------------------------------------
+
+function setResearchSourceCount(value, options) {
+  const count = RESEARCH_SOURCE_COUNTS.includes(Number(value)) ? Number(value) : 8;
+  researchSourceCountValue = count;
+  researchSegments.querySelectorAll(".segment-btn").forEach((btn) => {
+    const selected = Number(btn.dataset.value) === count;
+    btn.classList.toggle("is-selected", selected);
+    btn.setAttribute("aria-checked", selected ? "true" : "false");
+    btn.tabIndex = selected ? 0 : -1;
+  });
+  if (!options || options.persist !== false) saveSettings();
+}
+
+function initSegmentedControl() {
+  const buttons = Array.from(researchSegments.querySelectorAll(".segment-btn"));
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => setResearchSourceCount(btn.dataset.value));
+  });
+
+  researchSegments.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const index = buttons.findIndex((btn) => Number(btn.dataset.value) === researchSourceCountValue);
+    const step = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[(index + step + buttons.length) % buttons.length];
+    setResearchSourceCount(next.dataset.value);
+    next.focus();
+  });
+}
+
+// Port ----------------------------------------------------------------------
+
+function connectResearchPort() {
+  if (!browserAPI.runtime || typeof browserAPI.runtime.connect !== "function") {
+    throw new Error("This browser did not expose runtime.connect, so research cannot report progress.");
+  }
+  const port = browserAPI.runtime.connect({ name: RESEARCH_PORT_NAME });
+
+  port.onMessage.addListener((message) => {
+    if (!message || !message.type) return;
+
+    if (message.type === "snapshot") {
+      researchLocalError = null;
+      renderResearch(message.snapshot);
+      return;
+    }
+
+    if (message.type === "document") {
+      const pending = documentRequests.shift();
+      if (pending) pending.resolve(message);
+      return;
+    }
+
+    if (message.type === "error") {
+      const pending = documentRequests.shift();
+      if (pending) {
+        pending.reject(new Error(message.message));
+        return;
+      }
+      // A start that was refused: the message is shown verbatim, never reworded.
+      researchLocalError = message.message;
+      showResearchError(message.message);
+    }
+  });
+
+  return port;
+}
+
+function requestResearchDocument(runId) {
+  return new Promise((resolve, reject) => {
+    documentRequests.push({ resolve, reject });
+    researchPort.postMessage({ type: "getDocument", runId });
+  });
+}
+
+// Rendering -----------------------------------------------------------------
+
+const PHASE_TITLES = {
+  idle: "Research",
+  searching: "Researching",
+  running: "Researching",
+  done: "Downloaded",
+  cancelled: "Cancelled",
+  error: "Research failed",
+  empty: "Research failed",
+  interrupted: "Research failed"
+};
+
+const SHEET_STATES = {
+  idle: "plan",
+  searching: "run",
+  running: "run",
+  done: "done",
+  cancelled: "cancelled",
+  error: "error",
+  empty: "error",
+  interrupted: "error"
+};
+
+function renderResearch(snapshot) {
+  const previous = researchSnapshot;
+  researchSnapshot = snapshot;
+  const phase = snapshot.phase;
+  const live = phase === "searching" || phase === "running";
+
+  researchSheetTitle.textContent = PHASE_TITLES[phase] || "Research";
+  researchSheet.dataset.state = SHEET_STATES[phase] || "plan";
+  // The counter belongs to the run: once it is over, the result card carries
+  // the numbers and a stale "3 / 8" beside it would be a lie.
+  researchCount.hidden = !live;
+
+  if (live && !isSheetOpen() && (!previous || previous.phase === "idle")) {
+    // A run started elsewhere (or the popup reopened): present the sheet in
+    // its current state rather than animating a history the window missed.
+    researchInput.value = snapshot.query;
+    openSheet({ immediate: true });
+  }
+
+  if (live) {
+    researchInput.readOnly = true;
+    if (!researchInput.value) researchInput.value = snapshot.query;
+    renderRun(snapshot);
+    showBlock("run");
+  } else {
+    researchInput.readOnly = false;
+  }
+
+  if (phase === "done" || phase === "cancelled") {
+    renderResult(snapshot);
+    showBlock("result");
+  }
+
+  if (phase === "error" || phase === "empty" || phase === "interrupted") {
+    showResearchError(researchErrorMessage(snapshot));
+  }
+
+  if (phase === "idle" && !researchLocalError) {
+    showBlock("plan");
+  }
+
+  updateResearchBar(snapshot);
+  announceResearch(snapshot);
+  deliverResearchDocument(snapshot, previous);
+  moveResearchFocus(snapshot, previous);
+}
+
+function researchErrorMessage(snapshot) {
+  if (snapshot.phase === "empty") return "No sources found for that query.";
+  if (snapshot.phase === "interrupted") {
+    return "The run was interrupted — the browser restarted before it finished.";
+  }
+  return snapshot.error || "The run failed.";
+}
+
+function renderRun(snapshot) {
+  const total = snapshot.total;
+  const searching = snapshot.phase === "searching" || total === 0;
+
+  researchPhase.textContent = searching
+    ? "Finding sources…"
+    : (snapshot.degraded || `Reading ${total} ${total === 1 ? "source" : "sources"}.`);
+  researchPhase.classList.toggle("research-degraded", !searching && !!snapshot.degraded);
+
+  researchCount.hidden = searching;
+  researchCount.textContent = `${snapshot.completed} / ${total}`;
+
+  // Discovery has no denominator, so it gets no determinate progress: an empty
+  // bar and an indeterminate progressbar, never a bar that moves for show.
+  if (searching) {
+    researchTrack.removeAttribute("aria-valuenow");
+    researchTrack.setAttribute("aria-valuemax", "0");
+    researchTrack.setAttribute("aria-valuetext", "Finding sources");
+    progressSpring.set(0);
+    researchFill.style.transform = "scaleX(0)";
+  } else {
+    researchTrack.setAttribute("aria-valuenow", String(snapshot.completed));
+    researchTrack.setAttribute("aria-valuemax", String(total));
+    researchTrack.setAttribute("aria-valuetext", `${snapshot.completed} of ${total} sources fetched`);
+    const value = total > 0 ? snapshot.completed / total : 0;
+    if (value > progressSpring.target) progressSpring.to(value, Motion.PRESETS.move);
+  }
+
+  renderSourceRows(snapshot);
+}
+
+const ROW_STATES = {
+  pending: "queued",
+  fetching: "fetching",
+  ok: "done",
+  error: "failed",
+  skipped: "failed"
+};
+
+function renderSourceRows(snapshot) {
+  const key = `${snapshot.runId}:${snapshot.entries.length}`;
+  const rebuild = key !== renderedRunKey;
+  // A popup opened mid-run must not animate rows into a state that predates
+  // the window: the stagger runs only when every source is still queued, which
+  // is exactly the case where nothing has happened yet.
+  const stagger = rebuild && snapshot.entries.every((entry) => entry.status === "pending");
+
+  if (rebuild) {
+    researchSources.textContent = "";
+    rowSprings.length = 0;
+    renderedRunKey = key;
+
+    snapshot.entries.forEach((entry, index) => {
+      const row = document.createElement("li");
+      row.className = "source-row";
+      row.setAttribute("role", "listitem");
+
+      const glyph = document.createElement("span");
+      glyph.className = "source-glyph";
+      glyph.setAttribute("aria-hidden", "true");
+
+      const text = document.createElement("span");
+      text.className = "source-text";
+      const title = document.createElement("span");
+      title.className = "source-title";
+      const host = document.createElement("span");
+      host.className = "source-host";
+      text.append(title, host);
+
+      const note = document.createElement("span");
+      note.className = "source-note";
+
+      row.append(glyph, text, note);
+      researchSources.appendChild(row);
+
+      const spring = new Motion.Spring(0, {
+        damping: Motion.PRESETS.snappy.damping,
+        response: Motion.PRESETS.snappy.response,
+        onUpdate: (value) => {
+          row.style.opacity = String(Motion.clamp(value, 0, 1));
+          row.style.transform = Motion.prefersReducedMotion()
+            ? "none"
+            : `translate3d(0, ${(1 - value) * 8}px, 0)`;
+        }
+      });
+      rowSprings.push(spring);
+
+      if (!stagger || Motion.prefersReducedMotion()) {
+        spring.set(1);
+      } else {
+        // The stagger points down the list, in the direction the work travels.
+        setTimeout(() => spring.to(1, Motion.PRESETS.snappy), index * 40);
+      }
+    });
+  }
+
+  const rows = researchSources.children;
+  snapshot.entries.forEach((entry, index) => {
+    const row = rows[index];
+    if (!row) return;
+    row.dataset.state = ROW_STATES[entry.status] || "queued";
+    row.querySelector(".source-title").textContent = entry.title || entry.url;
+    row.querySelector(".source-host").textContent = entry.host;
+    const note = row.querySelector(".source-note");
+    note.textContent = entry.note;
+    note.title = entry.note;
+    row.setAttribute("aria-label", `${entry.host}, ${entry.note}`);
+  });
+}
+
+function renderResult(snapshot) {
+  const cancelled = snapshot.phase === "cancelled";
+
+  researchFile.textContent = snapshot.filename || "—";
+  researchTokens.textContent = `~${snapshot.tokenCount.toLocaleString()}`;
+  researchSourcesMeta.textContent = cancelled
+    ? `${snapshot.succeeded} of ${snapshot.total} sources were fetched before you stopped.`
+    : `${snapshot.succeeded} of ${snapshot.total} sources`;
+
+  researchResultNote.classList.toggle("hidden", !snapshot.resultsTooLargeToPersist && !snapshot.degraded);
+  if (snapshot.resultsTooLargeToPersist) {
+    researchResultNote.textContent =
+      "The document was too large to keep in session storage — copy or save it before closing the popup.";
+  } else if (snapshot.degraded) {
+    researchResultNote.textContent = snapshot.degraded;
+  }
+
+  researchCopyBtn.textContent = cancelled ? `Keep these ${snapshot.succeeded}` : "Copy Markdown";
+  researchAgainBtn.textContent = cancelled ? "Discard" : "New search";
+
+  const failures = researchFailures(snapshot);
+  researchFailedToggle.classList.toggle("hidden", failures.length === 0);
+  researchFailedToggle.textContent = failures.length === 1
+    ? "1 source failed"
+    : `${failures.length} sources failed`;
+
+  researchFailedList.textContent = "";
+  failures.forEach((failure) => {
+    const item = document.createElement("li");
+    const host = document.createElement("span");
+    host.className = "source-host";
+    host.textContent = failure.host;
+    const note = document.createElement("span");
+    note.className = "source-note";
+    note.textContent = failure.reason;
+    note.title = failure.reason;
+    item.append(host, note);
+    researchFailedList.appendChild(item);
+  });
+}
+
+// Nothing is smoothed over: a source that failed and a candidate that was
+// dropped before it was ever opened both keep their verbatim reason.
+function researchFailures(snapshot) {
+  const failures = snapshot.entries
+    .filter((entry) => entry.status === "error" || entry.status === "skipped")
+    .map((entry) => ({ host: entry.host, reason: entry.note }));
+  snapshot.rejected.forEach((item) => {
+    failures.push({ host: item.host, reason: item.reason });
+  });
+  return failures;
+}
+
+function showResearchError(message) {
+  researchErrorText.textContent = message;
+  researchAlert.textContent = message;
+  researchSheet.dataset.state = "error";
+  researchSheetTitle.textContent = "Research failed";
+  researchInput.readOnly = false;
+  if (!isSheetOpen()) openSheet();
+  showBlock("error");
+}
+
+function updateResearchBar(snapshot) {
+  const live = snapshot.phase === "searching" || snapshot.phase === "running";
+  researchBar.classList.toggle("is-running", live);
+  const collapsed = live && !isSheetOpen();
+  researchBarNote.classList.toggle("hidden", !collapsed);
+  if (collapsed) {
+    researchBarNote.textContent = snapshot.total > 0
+      ? `Researching ${snapshot.completed} / ${snapshot.total}`
+      : "Finding sources…";
+  }
+}
+
+// Announcements are the screen-reader channel; the row list is aria-live=off
+// because its churn would flood it.
+function announceResearch(snapshot) {
+  const phase = snapshot.phase;
+  let sentence = "";
+
+  if (phase === "searching") {
+    sentence = `Finding sources for "${snapshot.query}".`;
+  } else if (phase === "running") {
+    const fetching = snapshot.entries.filter((entry) => entry.status === "fetching");
+    const lead = fetching.length === 1
+      ? `Fetching ${fetching[0].host}.`
+      : `Fetching ${fetching.length} sources.`;
+    sentence = `${lead} ${snapshot.completed} of ${snapshot.total} done.`;
+  } else if (phase === "done") {
+    sentence = `Downloaded ${snapshot.filename}. ${snapshot.succeeded} of ${snapshot.total} sources, about ${snapshot.tokenCount.toLocaleString()} tokens.`;
+  } else if (phase === "cancelled") {
+    sentence = `Cancelled. ${snapshot.succeeded} of ${snapshot.total} sources were fetched.`;
+  }
+
+  if (!sentence || sentence === lastSummaryText) return;
+
+  const final = phase !== "searching" && phase !== "running";
+  const now = Date.now();
+  if (!final && now - lastSummaryAt < SUMMARY_INTERVAL_MS) return;
+
+  lastSummaryAt = now;
+  lastSummaryText = sentence;
+  researchSummary.textContent = sentence;
+}
+
+// Delivery ------------------------------------------------------------------
+// The primary key says "Research & Download", so a finished run downloads
+// itself. A cancelled run does not: stopping is not the same as asking for
+// what was collected, so it offers the choice instead.
+function deliverResearchDocument(snapshot, previous) {
+  if (snapshot.phase !== "done") return;
+  if (!snapshot.runId || researchDeliveredRunId === snapshot.runId) return;
+  if (previous && previous.phase === "done" && previous.runId === snapshot.runId) return;
+
+  researchDeliveredRunId = snapshot.runId;
+  requestResearchDocument(snapshot.runId)
+    .then((doc) => {
+      downloadMarkdownFile(doc.filename.replace(/\.md$/, ""), doc.markdown);
+    })
+    .catch((error) => {
+      showResearchError(error.message);
+    });
+}
+
+function moveResearchFocus(snapshot, previous) {
+  if (!previous) return;
+  if (previous.phase !== snapshot.phase) {
+    if (snapshot.phase === "searching" || snapshot.phase === "running") {
+      if (isSheetOpen()) researchCancelBtn.focus({ preventScroll: true });
+    } else if (snapshot.phase === "done" || snapshot.phase === "cancelled") {
+      if (isSheetOpen()) researchCopyBtn.focus({ preventScroll: true });
+    } else if (snapshot.phase === "error" || snapshot.phase === "empty" || snapshot.phase === "interrupted") {
+      if (isSheetOpen()) researchRetryBtn.focus({ preventScroll: true });
+    }
+  }
+}
+
+// Actions -------------------------------------------------------------------
+
+function startResearch() {
+  const query = researchInput.value.trim();
+  if (!query) return;
+
+  researchLocalError = null;
+  researchDeliveredRunId = null;
+  renderedRunKey = "";
+  lastSummaryText = "";
+  researchSources.textContent = "";
+  rowSprings.length = 0;
+  progressSpring.set(0);
+  researchFill.style.transform = "scaleX(0)";
+  researchPhase.textContent = "Finding sources…";
+  researchPhase.classList.remove("research-degraded");
+  researchCount.hidden = true;
+  researchSheetTitle.textContent = "Researching";
+  researchSheet.dataset.state = "run";
+  researchInput.readOnly = true;
+
+  if (!isSheetOpen()) openSheet();
+  showBlock("run");
+  researchCancelBtn.focus({ preventScroll: true });
+
+  researchPort.postMessage({
+    type: "start",
+    query,
+    sourceCount: researchSourceCountValue,
+    settings: getCurrentSettings()
+  });
+}
+
+function cancelResearch() {
+  if (!researchSnapshot || !researchSnapshot.runId) return;
+  researchPort.postMessage({ type: "cancel", runId: researchSnapshot.runId });
+}
+
+function isResearchRunning() {
+  return !!researchSnapshot &&
+    (researchSnapshot.phase === "searching" || researchSnapshot.phase === "running");
+}
+
+function resetResearch() {
+  researchLocalError = null;
+  researchDeliveredRunId = null;
+  renderedRunKey = "";
+  lastSummaryText = "";
+  researchInput.value = "";
+  researchInput.readOnly = false;
+  researchSources.textContent = "";
+  rowSprings.length = 0;
+  researchSheet.dataset.state = "plan";
+  researchSheetTitle.textContent = "Research";
+  researchCount.hidden = true;
+  goSpring.to(0, Motion.PRESETS.snappy);
+  showBlock("plan");
+  closeSheet();
+}
+
+function initResearch() {
+  researchPort = connectResearchPort();
+  initSegmentedControl();
+  initSheetGesture();
+  renderSheet(0);
+  blockSprings.plan.set(1);
+  researchPlan.style.opacity = "1";
+  researchGoBtn.style.opacity = "0";
+  researchGoBtn.style.pointerEvents = "none";
+
+  researchInput.addEventListener("input", () => {
+    const hasQuery = researchInput.value.trim().length > 0;
+    researchGoBtn.disabled = !hasQuery;
+    goSpring.to(hasQuery ? 1 : 0, Motion.PRESETS.snappy);
+
+    if (isResearchRunning()) return;
+    if (hasQuery && !isSheetOpen()) {
+      researchSheet.dataset.state = "plan";
+      showBlock("plan");
+      openSheet();
+      researchInput.focus({ preventScroll: true });
+    } else if (!hasQuery && isSheetOpen()) {
+      closeSheet();
+    }
+  });
+
+  // Raising the sheet is bound to the tap, not to focus: closing it returns
+  // focus to the field, and a focus handler would reopen what the user just
+  // pushed away. Tabbing into the field also should not raise a surface.
+  researchInput.addEventListener("click", () => {
+    if (researchInput.value.trim() && !isSheetOpen()) openSheet();
+  });
+
+  researchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!isResearchRunning()) startResearch();
+  });
+
+  researchGoBtn.addEventListener("click", startResearch);
+  researchStartBtn.addEventListener("click", startResearch);
+  researchCancelBtn.addEventListener("click", cancelResearch);
+  researchRetryBtn.addEventListener("click", startResearch);
+
+  researchEditBtn.addEventListener("click", () => {
+    researchSheet.dataset.state = "plan";
+    researchSheetTitle.textContent = "Research";
+    showBlock("plan");
+    researchInput.focus({ preventScroll: true });
+    researchInput.select();
+  });
+
+  researchCopyBtn.addEventListener("click", async () => {
+    if (!researchSnapshot || !researchSnapshot.runId) return;
+    const cancelled = researchSnapshot.phase === "cancelled";
+    try {
+      const doc = await requestResearchDocument(researchSnapshot.runId);
+      if (cancelled) {
+        downloadMarkdownFile(doc.filename.replace(/\.md$/, ""), doc.markdown);
+        researchFile.textContent = doc.filename;
+        researchSheet.dataset.state = "done";
+        researchSheetTitle.textContent = "Downloaded";
+        researchCopyBtn.textContent = "Copy Markdown";
+        researchAgainBtn.textContent = "New search";
+      } else {
+        await navigator.clipboard.writeText(doc.markdown);
+        researchCopyBtn.textContent = "Copied!";
+        setTimeout(() => { researchCopyBtn.textContent = "Copy Markdown"; }, 2000);
+      }
+    } catch (error) {
+      showResearchError(error.message);
+    }
+  });
+
+  researchAgainBtn.addEventListener("click", resetResearch);
+
+  researchFailedToggle.addEventListener("click", () => {
+    const expanded = researchFailedToggle.getAttribute("aria-expanded") === "true";
+    researchFailedToggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+    researchFailedList.classList.toggle("hidden", expanded);
+  });
+
+  researchScrim.addEventListener("click", () => {
+    if (isSheetOpen()) closeSheet();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (isConvertMenuOpen() || isChatLimitMenuOpen()) return;
+    if (isResearchRunning()) {
+      cancelResearch();
+    } else if (isSheetOpen()) {
+      closeSheet();
+    } else if (researchInput.value) {
+      researchInput.value = "";
+      researchGoBtn.disabled = true;
+      goSpring.to(0, Motion.PRESETS.snappy);
+    }
+  });
+}
 
 async function generateFileNameFromPageTitle() {
   let baseFilename = "scrapllm"; // Default filename

@@ -205,6 +205,21 @@ input {
   display: none !important;
 }
 
+/* Announced, never drawn. Used by the research status/alert regions, which
+   must not duplicate anything on screen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 :focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 2px;
@@ -217,9 +232,10 @@ input {
 
 .popup-wrapper {
   width: 25rem;
-  /* Sized to the tallest main-view state (multi-tab actions + token counter);
-     the settings panel scrolls inside the same frame. */
-  height: 22rem;
+  /* Sized to the tallest main-view state (multi-tab actions + token counter)
+     plus the 3.25rem research bar seated at the bottom edge. Constant in every
+     state — the popup window must never resize under the pointer. */
+  height: 25rem;
   position: relative;
   overflow: hidden;
   background: var(--background-color);
@@ -386,7 +402,8 @@ a.icon-btn {
 }
 
 .bottom-spacer {
-  height: var(--gap-sm);
+  /* Clears the research bar, so the action stack never sits underneath it. */
+  height: 3.5rem;
 }
 
 .main-controls {
@@ -1175,6 +1192,503 @@ input[type="checkbox"] {
 }
 
 /* ==========================================================================
+   RESEARCH
+   ==========================================================================
+   The bar is chrome: a translucent layer pinned to the bottom edge with the
+   action stack passing under it. The sheet is the task surface that bar
+   raises, so it comes up from the bar's own top edge and leaves the same way.
+   Every transform here belongs to a spring in popup.js — the only transitions
+   below are colour, shadow and the press scale.
+   ========================================================================== */
+
+/* Scrim sits under the header (z 3) on purpose: dimming the way out would
+   trap the user. It only pushes the action stack back. */
+.research-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--scrim);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#mainView.research-open .research-scrim {
+  pointer-events: auto;
+}
+
+/* While the sheet is up the actions drop behind the scrim, so the dimming
+   applies to them and not just to the empty field around them. */
+#mainView.research-open .center-section {
+  z-index: 1;
+}
+
+/* Bar ------------------------------------------------------------------ */
+
+.research-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  padding: var(--gap-sm) var(--edge) var(--gap-md);
+  background: var(--material-chrome);
+  -webkit-backdrop-filter: var(--material-blur-lg);
+  backdrop-filter: var(--material-blur-lg);
+}
+
+/* Scroll edge effect instead of a divider: content dissolves into the bar. */
+.research-bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 1.25rem;
+  background: linear-gradient(to top, var(--material-chrome), transparent);
+  pointer-events: none;
+}
+
+.research-field {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  min-height: 2.375rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.625rem;
+  border-radius: var(--r-pill);
+  background: var(--fill-quaternary);
+  box-shadow: inset 0 0 0 1px var(--separator);
+  transition: background-color var(--t-fast), box-shadow var(--t-fast);
+}
+
+.research-field:focus-within {
+  background: var(--surface-color);
+  box-shadow: inset 0 0 0 1px var(--primary-color), 0 0 0 3px var(--primary-tint);
+}
+
+.research-glyph {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  background-color: var(--label-tertiary);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.6-3.6'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.6-3.6'/%3E%3C/svg%3E");
+}
+
+/* A run in flight is visible from the bar even with the sheet pushed down. */
+.research-bar.is-running .research-glyph {
+  background-color: var(--primary-color);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
+  animation: scrapllm-spin 900ms linear infinite;
+}
+
+.research-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  outline: none;
+  font-size: 0.9375rem;
+  line-height: 1.3;
+  letter-spacing: 0;
+  color: var(--text-color);
+}
+
+.research-input::placeholder {
+  color: var(--label-tertiary);
+}
+
+.research-bar-note {
+  flex: none;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--label-secondary);
+}
+
+.primary-btn.research-go {
+  flex: none;
+  width: 1.875rem;
+  height: 1.875rem;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--r-pill);
+}
+
+.primary-btn.research-go .btn-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Sheet ---------------------------------------------------------------- */
+
+.research-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+  /* The bottom pad is the bar's height: the sheet passes under the bar
+     instead of butting against it. */
+  padding: var(--gap-md) var(--edge) 3.75rem;
+  /* Never covers the header — there is always a way out. */
+  max-height: calc(100% - 3.25rem);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  border-top: 1px solid var(--material-edge);
+  background: var(--material-menu);
+  -webkit-backdrop-filter: var(--material-blur-lg);
+  backdrop-filter: var(--material-blur-lg);
+  box-shadow: var(--shadow-3);
+  transform-origin: bottom center;
+  will-change: transform, filter;
+  touch-action: none;
+}
+
+.research-grabber {
+  width: 2.25rem;
+  height: 0.25rem;
+  margin: 0 auto;
+  border-radius: var(--r-pill);
+  background: var(--fill-secondary);
+}
+
+.research-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+}
+
+.research-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.014em;
+  color: var(--text-color);
+}
+
+.research-count {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--label-secondary);
+}
+
+.research-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+  min-height: 0;
+  will-change: transform, opacity, filter;
+}
+
+.research-lede {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  letter-spacing: 0;
+  color: var(--label-secondary);
+}
+
+.research-plan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+}
+
+.research-plan-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+  color: var(--label-tertiary);
+}
+
+.research-segmented {
+  display: flex;
+  gap: 0.125rem;
+  padding: 0.125rem;
+  border-radius: var(--r-pill);
+  background: var(--fill-tertiary);
+}
+
+.segment-btn {
+  min-width: 2.25rem;
+  height: 1.625rem;
+  border: none;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--label-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: color var(--t-fast), background-color var(--t-fast),
+    transform var(--t-fast);
+}
+
+.segment-btn:hover {
+  color: var(--text-color);
+}
+
+.segment-btn.is-selected {
+  background: var(--surface-raised);
+  color: var(--text-color);
+  box-shadow: var(--shadow-1);
+}
+
+.segment-btn.is-pressed {
+  transform: scale(0.94);
+}
+
+.research-actions {
+  display: flex;
+  gap: var(--gap-sm);
+}
+
+.research-actions .primary-btn,
+.research-actions .secondary-btn {
+  flex: 1;
+  min-height: 2.5rem;
+  font-size: 0.875rem;
+}
+
+/* Progress ------------------------------------------------------------- */
+
+.research-phase {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--label-secondary);
+}
+
+.research-degraded {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--warning-color);
+}
+
+.research-track {
+  height: 0.25rem;
+  border-radius: var(--r-pill);
+  background: var(--fill-tertiary);
+  overflow: hidden;
+}
+
+.research-fill {
+  height: 100%;
+  width: 100%;
+  border-radius: var(--r-pill);
+  background: var(--primary-color);
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
+}
+
+.research-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 8.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* A clipped row at the edge says "there is more" without a divider. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
+}
+
+.research-sources::-webkit-scrollbar {
+  width: 0.375rem;
+}
+
+.research-sources::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.research-sources::-webkit-scrollbar-thumb {
+  border-radius: var(--r-pill);
+  background: var(--fill-secondary);
+}
+
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 0.25rem 0;
+  will-change: transform, opacity;
+}
+
+.source-glyph {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  background-color: currentColor;
+  color: var(--label-tertiary);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  /* Hollow ring: queued, nothing claimed yet. */
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3C/svg%3E");
+}
+
+/* Shape carries the state; colour only reinforces it. */
+.source-row[data-state="fetching"] .source-glyph {
+  color: var(--primary-color);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
+  animation: scrapllm-spin 900ms linear infinite;
+}
+
+.source-row[data-state="done"] .source-glyph {
+  color: var(--success-color);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m8.5 12.2 2.4 2.4 4.6-5'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='m8.5 12.2 2.4 2.4 4.6-5'/%3E%3C/svg%3E");
+}
+
+.source-row[data-state="failed"] .source-glyph {
+  color: var(--error-color);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.2M12 16.3v.2'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.2M12 16.3v.2'/%3E%3C/svg%3E");
+}
+
+.source-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-title {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-host,
+.source-note {
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+  color: var(--label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-note {
+  flex: none;
+  max-width: 8rem;
+  text-align: right;
+}
+
+.source-row[data-state="failed"] .source-note {
+  color: var(--error-color);
+}
+
+/* Result --------------------------------------------------------------- */
+
+.research-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  padding: var(--gap-md);
+  border-radius: var(--r-md);
+  background: var(--surface-color);
+  border: 1px solid var(--separator);
+  box-shadow: var(--shadow-1);
+}
+
+.research-result-note {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--warning-color);
+}
+
+.result-file {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-xs);
+}
+
+.result-sources {
+  margin-left: auto;
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+  color: var(--label-tertiary);
+}
+
+.research-disclosure {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary-color);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.research-disclosure.is-pressed {
+  opacity: 0.7;
+}
+
+.research-failed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 6rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.research-failed-list li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-sm);
+}
+
+.research-failed-list .source-note {
+  margin-left: auto;
+  max-width: 12rem;
+  color: var(--error-color);
+}
+
+.research-error-text {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--error-color);
+}
+
+/* ==========================================================================
    ACCESSIBILITY PREFERENCES
    ========================================================================== */
 
@@ -1198,10 +1712,27 @@ input[type="checkbox"] {
   .secondary-btn.is-pressed,
   .icon-btn.is-pressed,
   .theme-btn.is-pressed,
+  .segment-btn.is-pressed,
   .reset-btn.is-pressed,
   .split-btn-menu-item.is-pressed {
     transform: none;
     filter: brightness(0.94);
+  }
+
+  /* The sheet arrives in place instead of travelling; the rows do not stagger
+     in, and the fetching glyph stops spinning but stays legible. */
+  .research-sheet {
+    transition: opacity 140ms ease;
+  }
+
+  .source-row {
+    transform: none !important;
+  }
+
+  .source-row[data-state="fetching"] .source-glyph,
+  .research-bar.is-running .research-glyph {
+    animation: none;
+    opacity: 0.7;
   }
 }
 
@@ -1222,9 +1753,25 @@ input[type="checkbox"] {
     border-bottom-color: var(--separator);
   }
 
-  .settings-content {
+  .settings-content,
+  .research-sources {
     -webkit-mask-image: none;
     mask-image: none;
+  }
+
+  .research-bar,
+  .research-sheet {
+    background: var(--surface-color);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .research-bar::before {
+    display: none;
+  }
+
+  .research-bar {
+    border-top: 1px solid var(--separator);
   }
 }
 
@@ -1246,7 +1793,10 @@ input[type="checkbox"] {
 
   .header,
   .split-btn-menu,
-  .setting-group {
+  .setting-group,
+  .research-sheet,
+  .research-bar,
+  .research-result {
     background: var(--surface-color);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -1255,5 +1805,10 @@ input[type="checkbox"] {
 
   .secondary-btn {
     border: 1px solid var(--border-color);
+  }
+
+  .research-field,
+  .research-track {
+    box-shadow: inset 0 0 0 1px var(--border-color);
   }
 }

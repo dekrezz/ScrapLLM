@@ -143,6 +143,107 @@
           <div class="bottom-spacer"></div>
         </div>
 
+        <!-- ==================================================================
+             RESEARCH
+             One question in, one Markdown file out. The bar is permanent
+             chrome; the sheet is the task surface it raises, and it leaves
+             down the same axis it came up.
+             ================================================================== -->
+
+        <!-- Dims the action stack while the sheet is up; the header stays lit,
+             so there is always a way out. -->
+        <div id="researchScrim" class="research-scrim hidden" aria-hidden="true"></div>
+
+        <div id="researchBar" class="research-bar">
+          <div class="research-field">
+            <span class="research-glyph" aria-hidden="true"></span>
+            <input id="researchInput" class="research-input" type="text" autocomplete="off"
+                   spellcheck="false" placeholder="Research a question…"
+                   aria-label="Research a question" aria-controls="researchSheet"
+                   aria-expanded="false" />
+            <span id="researchBarNote" class="research-bar-note hidden"></span>
+            <button id="researchGoBtn" class="primary-btn research-go" type="button"
+                    aria-label="Start research" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                   stroke-linecap="round" stroke-linejoin="round" class="btn-icon" aria-hidden="true">
+                <path d="M5 12h13M13 6.5 18.5 12 13 17.5" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <section id="researchSheet" class="research-sheet hidden" data-state="plan"
+                 role="region" aria-labelledby="researchSheetTitle" aria-hidden="true">
+          <div class="research-grabber" aria-hidden="true"></div>
+
+          <header class="research-head">
+            <h2 id="researchSheetTitle" class="research-title">Research</h2>
+            <span id="researchCount" class="research-count" hidden>0 / 0</span>
+          </header>
+
+          <!-- STATE: plan -->
+          <div id="researchPlan" class="research-block" data-block="plan">
+            <p class="research-lede">Searches the web, reads each page, and downloads one Markdown file.</p>
+            <div class="research-plan-row">
+              <span class="research-plan-label">Sources</span>
+              <div id="researchSegments" class="research-segmented" role="radiogroup"
+                   aria-label="How many sources to read">
+                <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="5">5</button>
+                <button class="segment-btn is-selected" type="button" role="radio" aria-checked="true" tabindex="0" data-value="8">8</button>
+                <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="12">12</button>
+              </div>
+            </div>
+            <div class="research-actions">
+              <button id="researchStartBtn" class="primary-btn" type="button">Research &amp; Download</button>
+            </div>
+          </div>
+
+          <!-- STATE: run -->
+          <div id="researchRun" class="research-block hidden" data-block="run">
+            <p class="research-phase">Finding sources…</p>
+            <div id="researchTrack" class="research-track" role="progressbar"
+                 aria-valuemin="0" aria-valuemax="0" aria-valuetext="Finding sources">
+              <div class="research-fill"></div>
+            </div>
+            <ul id="researchSources" class="research-sources" role="list" aria-live="off"></ul>
+            <div class="research-actions">
+              <button id="researchCancelBtn" class="secondary-btn" type="button">Cancel</button>
+            </div>
+          </div>
+
+          <!-- STATE: done / cancelled -->
+          <div id="researchResult" class="research-block hidden" data-block="result">
+            <p class="research-result-note hidden"></p>
+            <div class="research-result">
+              <span id="researchFile" class="result-file"></span>
+              <div class="result-meta">
+                <span id="researchTokens" class="token-value" title="Estimated with the o200k_base encoding">~0</span>
+                <span class="token-label">tokens</span>
+                <span id="researchSourcesMeta" class="result-sources"></span>
+              </div>
+            </div>
+            <button id="researchFailedToggle" class="research-disclosure hidden" type="button"
+                    aria-expanded="false" aria-controls="researchFailedList"></button>
+            <ul id="researchFailedList" class="research-failed-list hidden" role="list"></ul>
+            <div class="research-actions">
+              <button id="researchCopyBtn" class="primary-btn" type="button">Copy Markdown</button>
+              <button id="researchAgainBtn" class="secondary-btn" type="button">New search</button>
+            </div>
+          </div>
+
+          <!-- STATE: error / empty / interrupted -->
+          <div id="researchError" class="research-block hidden" data-block="error">
+            <p id="researchErrorText" class="research-error-text"></p>
+            <div class="research-actions">
+              <button id="researchRetryBtn" class="primary-btn" type="button">Try again</button>
+              <button id="researchEditBtn" class="secondary-btn" type="button">Edit query</button>
+            </div>
+          </div>
+
+          <p id="researchSummary" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+          <p id="researchAlert" class="sr-only" role="alert"></p>
+        </section>
+
       </div>
 
       <!-- Settings View -->
