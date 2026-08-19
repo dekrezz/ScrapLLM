@@ -846,8 +846,11 @@ describe('ScrapLLMResearch document builder', () => {
     expect(doc.markdown).toContain('Notes: only 3 usable sources after filtering');
 
     expect(doc.markdown).toContain('## Sources');
-    expect(doc.markdown).toContain('1. [Page title for https://example1.com/guides/topic-1](https://example1.com/guides/topic-1) — example1.com');
-    expect(doc.markdown).toContain('2. [Page title for https://example3.com/guides/topic-3](https://example3.com/guides/topic-3) — example3.com');
+    // Link targets are emitted in the <…> form, with the characters that could
+    // close them percent-encoded, so a source URL cannot break out of the link
+    // and write structure into a document a model is about to read.
+    expect(doc.markdown).toContain('1. [Page title for https://example1.com/guides/topic-1](<https://example1.com/guides/topic-1>) — example1.com');
+    expect(doc.markdown).toContain('2. [Page title for https://example3.com/guides/topic-3](<https://example3.com/guides/topic-3>) — example3.com');
 
     expect(doc.markdown).toContain('### Not fetched');
     expect(doc.markdown).toContain('- https://example2.com/guides/topic-2 — Conversion did not answer within 30 s');
