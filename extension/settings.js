@@ -27,6 +27,11 @@ const SettingsUtils = (function() {
       redditCommentSort: 'confidence',
       // Comment ceiling per thread; 'all' means no cap.
       redditMaxComments: 250,
+      // Chat export: how many exchanges (one user turn plus the assistant's
+      // reply) to copy, counted from the end. Defaults to a slice rather than
+      // 'all' — a two-year-old thread can be tens of thousands of messages,
+      // and copying it whole is a good way to hang the tab.
+      chatExchangeLimit: 10,
       // X-aware extraction: renders the thread (post + replies) or the timeline
       // by walking the virtualised list instead of the first visible post only.
       xMode: true,

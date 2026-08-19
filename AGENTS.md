@@ -42,6 +42,7 @@ git push origin feature/your-feature-name
 - `extension/x.js` - X (Twitter) thread/timeline extraction (post + replies)
 - `extension/motion.js` - Spring + gesture runtime shared by popup and content script
 - `extension/selection.js` - Highlighted-fragment excerpts (code vs prose, line range, source)
+- `extension/chat.js` - LLM conversation export (site API + DOM fallback)
 - `extension/popup.js` - Popup UI and settings handling
 - `extension/popup.html` - UI structure
 - `extension/styles.css` - Styling
@@ -72,6 +73,7 @@ LLMFeeder/
 │   ├── x.js                  # X (Twitter) extractor (microdata + DOM, scroll collection)
 │   ├── motion.js             # Springs, gesture tracking, press feedback
 │   ├── selection.js          # Selection excerpts (code detection, line range)
+│   ├── chat.js               # Conversation export (ChatGPT, Claude, local UIs)
 │   └── background.js         # Background script for keyboard shortcuts
 │
 ├── scripts/
@@ -112,6 +114,7 @@ Edit files in the `extension/` directory based on your feature:
 | X (Twitter) thread/timeline output | `x.js` |
 | Motion, gestures, press feedback | `motion.js` |
 | Selection excerpt output | `selection.js` |
+| Chat transcript output | `chat.js` |
 | Keyboard shortcuts | `background.js`, `manifest.json` |
 | Permissions | `manifest.json` |
 
@@ -263,6 +266,34 @@ Relevant settings: `xMode` (default on), `xMaxPosts` (number or `'all'`),
 | `showNotification` | popup.js → content.js |
 
 ---
+
+### Chat Extractor (`chat.js`)
+
+`contentScope: 'chat'` routes through `LLMFeederChat.convert()`. The popup shows
+a black **Copy Chat** button with an exchange picker whenever `getChatInfo`
+reports a conversation on the page.
+
+| Function | Purpose |
+|----------|---------|
+| `getSite(location)` | Registry lookup: claude, chatgpt, gemini, grok, perplexity, deepseek, copilot, mistral, cursor, or any loopback origin |
+| `inspect()` | Probe for the popup: is this a chat, which site, how many exchanges |
+| `convert(settings, deps)` | `{ markdown, articleData }` or `null` |
+| `walkActiveBranch(...)` | Root→leaf path through the message tree |
+| `groupExchanges(messages)` | One exchange = a user turn plus the assistant's reply |
+
+A conversation is a tree, not a list: editing a message mid-thread grows a
+sibling branch and the old one stays in the database. Both API paths
+(`claude.ai` via `chat_conversations?tree=True`, `chatgpt.com` via
+`/backend-api/conversation/<id>` with the session bearer token) walk parents up
+from the active leaf, so the export matches what the user sees. When there is no
+API — or it fails — the DOM path runs: known layouts first, then a role
+heuristic (author-role attributes, then class/testid/aria hints) so unknown and
+self-hosted front-ends still work.
+
+Detection is deliberately conservative off the known hosts: at least four turns
+*and* explicit role markers on most of them, otherwise a comment thread would
+light up the button. `chatExchangeLimit` defaults to 10 rather than 'all' —
+copying a multi-year thread whole is how you hang the tab.
 
 ### Selection Extractor (`selection.js`)
 

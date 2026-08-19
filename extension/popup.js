@@ -88,6 +88,11 @@ const convertMenu = document.getElementById("convertMenu");
 const convertOverrideBtn = document.getElementById("convertOverrideBtn");
 const convertOverrideLabel = convertOverrideBtn ? convertOverrideBtn.querySelector(".override-label") : null;
 const copySelectionBtn = document.getElementById("copySelectionBtn");
+const chatAction = document.getElementById("chatAction");
+const copyChatBtn = document.getElementById("copyChatBtn");
+const chatLimitBtn = document.getElementById("chatLimitBtn");
+const chatLimitMenu = document.getElementById("chatLimitMenu");
+let chatExchangeLimitValue = "10";
 const downloadBtn = document.getElementById("downloadBtn");
 const statusIndicator = document.getElementById("statusIndicator");
 
@@ -404,6 +409,67 @@ async function initSelectionAction() {
   }
 }
 
+// Chat exchange picker. A native <select> renders as the OS control — wrong
+// arrow, wrong focus ring, wrong colours inside a dark key — so the segment is
+// a caret button with the same materialising menu as the convert split button.
+const chatLimitSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.snappy.damping,
+  response: Motion.PRESETS.snappy.response,
+  onUpdate: (value) => {
+    const eased = Motion.clamp(value, 0, 1.05);
+    chatLimitMenu.style.transform =
+      `translate3d(0, ${(1 - eased) * -6}px, 0) scale(${0.9 + eased * 0.1})`;
+    chatLimitMenu.style.opacity = String(Motion.clamp(eased * 1.4, 0, 1));
+    chatLimitMenu.style.filter = eased > 0.99 ? "none" : `blur(${(1 - eased) * 6}px)`;
+  },
+  onRest: (spring) => {
+    if (spring.value <= 0.001) chatLimitMenu.classList.add("hidden");
+  }
+});
+
+function isChatLimitMenuOpen() {
+  return !chatLimitMenu.classList.contains("hidden") && chatLimitSpring.target > 0.5;
+}
+
+function openChatLimitMenu() {
+  chatLimitMenu.classList.remove("hidden");
+  chatLimitBtn.setAttribute("aria-expanded", "true");
+  chatLimitSpring.to(1, Motion.PRESETS.snappy);
+}
+
+function closeChatLimitMenu() {
+  chatLimitBtn.setAttribute("aria-expanded", "false");
+  if (chatLimitMenu.classList.contains("hidden")) return;
+  chatLimitSpring.to(0, Motion.PRESETS.snappy);
+}
+
+function setChatExchangeLimit(value, options) {
+  chatExchangeLimitValue = value;
+  chatLimitMenu.querySelectorAll(".split-btn-menu-item").forEach((item) => {
+    const selected = item.dataset.value === value;
+    item.classList.toggle("is-selected", selected);
+    item.setAttribute("aria-checked", selected ? "true" : "false");
+  });
+  if (!options || options.persist !== false) saveSettings();
+}
+
+// Offer the chat action only where there is a conversation to copy: LLM
+// front-ends, including self-hosted ones on a local port.
+async function initChatAction() {
+  try {
+    const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
+    if (!tabs || tabs.length === 0) return;
+
+    const response = await browserAPI.tabs.sendMessage(tabs[0].id, { action: "getChatInfo" });
+    const info = response && response.success ? response.info : null;
+    if (!info || !info.isChat) return;
+
+    chatAction.classList.remove("hidden");
+  } catch (error) {
+    // No content script on this page (store, about:, PDF viewer).
+  }
+}
+
 // Load user settings
 async function loadSettings() {
   try {
@@ -428,6 +494,7 @@ async function loadSettings() {
     redditModeCheckbox.checked = data.redditMode !== false;
     redditCommentSortSelect.value = data.redditCommentSort;
     redditMaxCommentsSelect.value = String(data.redditMaxComments);
+    setChatExchangeLimit(String(data.chatExchangeLimit), { persist: false });
     xModeCheckbox.checked = data.xMode !== false;
     xIncludeRepliesCheckbox.checked = data.xIncludeReplies !== false;
     xMaxPostsSelect.value = String(data.xMaxPosts);
@@ -460,6 +527,7 @@ async function saveSettings() {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const chatExchangeLimit = chatExchangeLimitValue;
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
@@ -479,6 +547,7 @@ async function saveSettings() {
       redditMode,
       redditCommentSort,
       redditMaxComments,
+      chatExchangeLimit,
       xMode,
       xIncludeReplies,
       xMaxPosts,
@@ -616,6 +685,7 @@ function getCurrentSettings() {
     redditMode: redditModeCheckbox.checked,
     redditCommentSort: redditCommentSortSelect.value,
     redditMaxComments: redditMaxCommentsSelect.value,
+    chatExchangeLimit: chatExchangeLimitValue,
     xMode: xModeCheckbox.checked,
     xIncludeReplies: xIncludeRepliesCheckbox.checked,
     xMaxPosts: xMaxPostsSelect.value,
@@ -736,6 +806,7 @@ async function convertToMarkdown(scopeOverride) {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const chatExchangeLimit = chatExchangeLimitValue;
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
@@ -756,6 +827,7 @@ async function convertToMarkdown(scopeOverride) {
         redditMode,
         redditCommentSort,
         redditMaxComments,
+        chatExchangeLimit,
         xMode,
         xIncludeReplies,
         xMaxPosts,
@@ -829,6 +901,7 @@ async function downloadMarkdown() {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const chatExchangeLimit = chatExchangeLimitValue;
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
@@ -849,6 +922,7 @@ async function downloadMarkdown() {
         redditMode,
         redditCommentSort,
         redditMaxComments,
+        chatExchangeLimit,
         xMode,
         xIncludeReplies,
         xMaxPosts,
@@ -984,6 +1058,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateShortcutDisplay();
   await loadSettings();
   initSelectionAction();
+  initChatAction();
 
   // Detect multi-tab selection (non-blocking, runs in background)
   // UI defaults to single-tab mode, then switches if multiple tabs detected
@@ -997,6 +1072,23 @@ document.addEventListener("DOMContentLoaded", async () => {
     convertToMarkdown();
   });
   copySelectionBtn.addEventListener("click", () => convertToMarkdown("selection"));
+  copyChatBtn.addEventListener("click", () => convertToMarkdown("chat"));
+  chatLimitBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (isChatLimitMenuOpen()) {
+      closeChatLimitMenu();
+    } else {
+      openChatLimitMenu();
+    }
+  });
+
+  chatLimitMenu.querySelectorAll(".split-btn-menu-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      setChatExchangeLimit(item.dataset.value);
+      closeChatLimitMenu();
+      chatLimitBtn.focus();
+    });
+  });
   downloadBtn.addEventListener("click", downloadMarkdown);
 
   // Convert split-button menu (override contentScope for one-shot full-page copy)
@@ -1020,12 +1112,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (isConvertMenuOpen() && !convertSplit.contains(e.target)) {
       closeConvertMenu();
     }
+    if (isChatLimitMenuOpen() && !chatAction.contains(e.target)) {
+      closeChatLimitMenu();
+    }
   });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && isConvertMenuOpen()) {
       closeConvertMenu();
       convertMenuBtn.focus();
+    }
+    if (e.key === "Escape" && isChatLimitMenuOpen()) {
+      closeChatLimitMenu();
+      chatLimitBtn.focus();
     }
   });
 

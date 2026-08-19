@@ -123,6 +123,19 @@
       return true;
     }
 
+    // Chat probe: does this page hold an LLM conversation?
+    if (request.action === 'getChatInfo') {
+      try {
+        const info = typeof LLMFeederChat !== 'undefined'
+          ? LLMFeederChat.inspect()
+          : { isChat: false };
+        sendResponse({ success: true, info });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+      return true;
+    }
+
     // Get debug logs handler
     if (request.action === 'getDebugLogs') {
       sendResponse({ success: true, logs: DebugLog.getLogs() });
@@ -651,6 +664,22 @@
           DebugLog.log('Lazy load detected but no scrollable container; skipping scroll-pass');
         }
       }
+    }
+
+    // Conversations are their own scope: the transcript lives behind the site's
+    // API or in a virtualised list, and Readability sees neither.
+    if (settings.contentScope === 'chat' && typeof LLMFeederChat !== 'undefined') {
+      const chat = await LLMFeederChat.convert(settings, {
+        logger: {
+          log: (message, data) => DebugLog.log(message, data),
+          error: (message, error) => DebugLog.error(message, error)
+        },
+        createTurndown: () => configureTurndownService(settings)
+      });
+      if (chat) {
+        return postProcessMarkdown(chat.markdown, settings, chat.articleData);
+      }
+      throw new Error('No conversation could be extracted from this page');
     }
 
     // A highlighted fragment is an excerpt, not a page: it gets a source line,
