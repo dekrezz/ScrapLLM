@@ -2,7 +2,7 @@
 
 Browser extension that turns whatever is on screen into clean Markdown, ready to paste into an LLM. One click for a page, one for a highlighted fragment, one for a whole chat transcript.
 
-Chrome and Firefox. Conversion happens entirely in your browser — no account, no telemetry, and page content is never sent anywhere. (The optional token counter fetches static tokenizer data from `tiktoken.pages.dev` once and caches it. **Research** is the one feature that talks to a third party: it sends your question to DuckDuckGo to find sources. Everything else is offline.)
+Chrome and Firefox. Conversion happens entirely in your browser — no account, no telemetry, and page content is never sent anywhere. (The optional token counter fetches static tokenizer data from `tiktoken.pages.dev` once and caches it. **Research** is the one feature that talks to a third party: it sends your question to DuckDuckGo to find sources, then reads each accepted source itself — without your cookies. Everything else is offline.)
 
 ---
 
@@ -15,7 +15,7 @@ Chrome and Firefox. Conversion happens entirely in your browser — no account, 
 | **Copy Chat** | An LLM conversation with roles and timestamps — the whole thread or just the last N exchanges |
 | **Download Markdown** | The same output as a `.md` file |
 | **Multi-tab** | Several selected tabs at once — merged into one file or zipped separately |
-| **Research** | One question in, one Markdown file out: the extension searches the web, opens each source in a background tab, converts it, and downloads the merged document |
+| **Research** | One question in, one Markdown file out: the extension searches the web, reads each source with no tab at all, converts it, and downloads the merged document |
 
 Site-aware extraction where the generic path loses the point:
 
@@ -25,19 +25,32 @@ Site-aware extraction where the generic path loses the point:
 
 ## Research
 
-Type a question into the bar at the bottom of the popup and the extension does the reading for you: it searches DuckDuckGo, opens each accepted result in a muted background tab, runs the ordinary conversion on it, and downloads one Markdown file with front matter, a numbered source list and every captured page.
+Type a question into the bar at the bottom of the popup and the extension does the reading for you: it searches DuckDuckGo, captures each accepted result, and downloads one Markdown file with front matter, a numbered source list and every captured page.
+
+### Two capture paths
+
+Most sources are captured **quietly** — no tab is created at any point. The page's HTML is fetched in the background and converted with the same Readability and Turndown code the content script runs, so the Markdown is the same one you would get from a tab. On a lot of pages it is better: post-hydration UI chrome is not in the served HTML, so there is less for Readability to keep.
+
+That fetch is deliberately **credential-less**. A search result — or something in its redirect chain — should not be able to pull your logged-in copy of a page into a file you are about to paste into a model. It also refuses anything pointing at your own machine or LAN (`localhost`, `*.local`, private IP ranges), before the request and again after redirects, and it stops reading a body at 5 MB.
+
+A source falls back to a **rendered** capture — one muted background tab, for that source only — when the quiet path hits something a browser is genuinely needed for: a bot check or other non-2xx status, a redirect onto a consent or login host or path, an empty JavaScript shell, a failed parse, or fewer than 500 characters of extracted text. Reddit and X escalate before the fetch, because their extractors need the live page. Some things escalate to nothing at all, because a tab could not help either: a PDF, a 404 or 410, a network failure, or a body the server never identified are refused by name instead.
+
+Each source says which path it took — `host · rendered` on its row in the popup (quiet is the default, so it is not badged), in the screen-reader label, and in a `Note:` line in the document. The front matter counts both.
+
+The quiet path needs read access to the sites it fetches. That is an **optional** permission, asked for from the Research button the first time you use it. Declining it is not a failure: the run falls back to a tab per source, which needs no permission, and says so once. What you lose is quiet, never capability.
 
 What it does *not* do, and why:
 
 - **It is not a browsing agent.** One query, one round of results — it does not follow links, reformulate the question, or read the pages it downloads.
 - **5, 8 or 12 sources per run**, and the number in the progress counter is how many sources survived filtering, not how many you asked for. DuckDuckGo returns ten results a page, so 12 is a ceiling rather than a promise.
 - **It skips what it cannot read**, and says so. PDFs and other non-pages, login walls (LinkedIn, Facebook, Quora, Academia…), paywalled publishers (WSJ, FT, NYT, Medium…) and duplicate hosts are dropped before fetching, each with its reason, and every dropped or failed source is listed under `### Not fetched` in the document and in the popup.
-- **Background tabs are never rendered**, so the lazy-load scroll pass is forced off for research: infinite feeds, virtualised timelines and sections that only load on scroll are captured as the server sent them. Every source carries a note saying so.
-- **It uses your browser, so it uses your session.** Pages are fetched by a real tab with your cookies; a site that blocks or personalises for you will do the same here.
-- **Budgets, not hangs.** 20 s for a page to become scriptable, 30 s for its conversion, 4 minutes for the whole run, three tabs at a time. Whatever is left over comes back as skipped rather than stalling.
-- **Cancel closes every tab it opened**, keeps whatever was already captured, and a crashed or restarted browser has its leftover tabs cleaned up on the next start.
+- **Nothing is scrolled.** The quiet path has no page to scroll and a background tab is never rendered, so the lazy-load pass is forced off for research: infinite feeds, virtualised timelines and sections that only load on scroll are captured as the server sent them. Every source carries a note saying so.
+- **A quiet capture is not your session.** No cookies are sent, so a personalised or member-only page comes back walled or thin — and escalates to a tab, where your own session applies in your own window.
+- **A thin capture says it is thin.** Above the 500-character floor but under 1500, the text is kept *and* labelled, on the row and in the document. A short capture is never passed off as the whole page.
+- **Budgets, not hangs.** 10 s for a fetch, 20 s for a page to become scriptable, 30 s for its conversion, 4 minutes for the whole run, three sources at a time. Whatever is left over comes back as skipped rather than stalling.
+- **Cancel opens no tabs.** It stops the run, closes any tab it had opened, and keeps whatever was already captured; a crashed or restarted browser has its leftover tabs cleaned up on the next start.
 
-Search results are found by fetching DuckDuckGo's HTML endpoint (`html.duckduckgo.com`, falling back to `lite.duckduckgo.com`) — the only two hosts the feature adds to the extension's permissions. Rate limiting, a blank result page and changed markup are reported as distinct, specific errors rather than as an empty file.
+Search results are found by fetching DuckDuckGo's HTML endpoint (`html.duckduckgo.com`, falling back to `lite.duckduckgo.com`) — the only two hosts the feature adds as *required* permissions; the quiet path's site access is optional and requested at run time. Rate limiting, a blank result page and changed markup are reported as distinct, specific errors rather than as an empty file.
 
 ## Interface
 
@@ -78,7 +91,8 @@ Rebind them at `chrome://extensions/shortcuts` or in Firefox's add-on manager.
 - **Reddit** — comment sort and a cap on comments per thread
 - **X** — replies on/off and a cap on posts
 - **Chat** — how many exchanges to copy (defaults to the last 10, not the whole thread)
-- **Research** — how many sources one run tries to capture (5, 8 or 12); it lives on the research sheet itself
+- **Research** — how many sources one run tries to capture (5, 8 or 12), on the research sheet itself
+- **Capture** — *Quiet* (the default: read sources without a tab, falling back to one only where a page needs it) or *Always render*, which opens a background tab for every source
 - **Token counter**, **debug logging**, **lazy-load auto-scroll**
 
 ## Project layout
@@ -90,16 +104,19 @@ extension/
 ├── settings.js          Shared setting defaults, used by popup and background
 ├── styles.css           Design system: materials, typography, themes, a11y
 ├── motion.js            Springs, gestures, momentum, press feedback
-├── content.js           Core extraction and Markdown conversion
+├── content.js           Live-page extraction: selection, chat, lazy-load scroll
+├── convert-core.js       Document → Markdown, shared by content script, worker and offscreen
 ├── selection.js         Highlighted-fragment excerpts (code vs prose, line range)
 ├── chat.js              LLM conversation export (site API + DOM fallback)
 ├── reddit.js            Reddit threads and listings
 ├── x.js                 X threads, profiles and timelines
 ├── multi-tab-utils.js   Multi-tab batching, worker pool, filenames, ZIP naming
 ├── search.js            Research: DuckDuckGo source discovery (background only)
-├── research.js          Research: run engine, background tabs, merged document
+├── quiet-capture.js      Research: credential-less fetch, guards, escalation signals
+├── research.js          Research: run engine, capture paths, merged document
 ├── token-counter.js     Token estimation
 ├── background.js        Keyboard shortcuts, context menus, multi-tab work, research port
+├── offscreen.html/js     Chrome only: the DOM the MV3 worker does not have
 ├── icons/               Extension icons (16, 48, 128, 1024)
 └── libs/                Readability, Turndown, JSZip, browser-polyfill
 ```

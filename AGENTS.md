@@ -397,6 +397,9 @@ page's `<script>` list, and in all three `cp` blocks.
 
 ## Browser differences
 
-Chrome is MV3 with a service worker; the build script rewrites the manifest for
-Firefox (MV2 background scripts, `browser_specific_settings`). Use the
+Chrome is MV3 with a service worker; the build script rewrites the same MV3
+manifest for Firefox — `background.scripts` (an event page, which is where
+`convert-core.js` parses research pages), `browser_specific_settings`, and the
+`offscreen` permission stripped, since Firefox has no offscreen API and needs
+none. Use the
 `browserAPI` wrapper in the popup and `browserRuntime` in content scripts.
