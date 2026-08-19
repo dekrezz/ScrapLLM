@@ -484,7 +484,9 @@ const ScrapLLMResearch = (function() {
 
   function notesForSource(source) {
     const notes = [LAZY_LOAD_NOTE];
-    if (source.host === 'x.com' || source.host === 'twitter.com') {
+    // Same host test as x.js and the quiet preflight: mobile.twitter.com is an
+    // X timeline too, and the note about virtualisation applies to it as well.
+    if (/(^|\.)(x\.com|twitter\.com)$/.test(source.host || '')) {
       notes.push(X_NOTE);
     }
     return notes;

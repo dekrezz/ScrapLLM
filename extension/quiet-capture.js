@@ -140,7 +140,11 @@ const ScrapLLMQuietCapture = (function() {
     if (config.redditMode !== false && /(^|\.)reddit\.com$/.test(host)) {
       return { decision: 'render', reason: "Reddit's comment tree needs the page's own session, so a tab was opened" };
     }
-    if (config.xMode !== false && /^(x|twitter)\.com$/.test(host)) {
+    // The same host test x.js uses, so every URL its extractor would claim on a
+    // live page escalates here: www.x.com, mobile.twitter.com and the bare
+    // hosts all serve the same posts, and a fetched copy of any of them loses
+    // the thread.
+    if (config.xMode !== false && /(^|\.)(x\.com|twitter\.com)$/.test(host)) {
       return { decision: 'render', reason: 'X timelines are virtualised, so a tab was opened' };
     }
     return null;
