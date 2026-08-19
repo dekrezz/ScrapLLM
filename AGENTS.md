@@ -38,6 +38,7 @@ git push origin feature/your-feature-name
 
 **Key Files for Feature Development:**
 - `extension/content.js` - Core conversion logic (main content extraction, markdown)
+- `extension/reddit.js` - Reddit thread/listing extraction (post + comment tree)
 - `extension/popup.js` - Popup UI and settings handling
 - `extension/popup.html` - UI structure
 - `extension/styles.css` - Styling
@@ -64,6 +65,7 @@ LLMFeeder/
 │   ├── popup.js              # Popup logic (18KB)
 │   ├── styles.css            # Popup styling
 │   ├── content.js            # Content script (42KB) - CORE LOGIC
+│   ├── reddit.js             # Reddit extractor (JSON API + DOM fallback)
 │   └── background.js         # Background script for keyboard shortcuts
 │
 ├── scripts/
@@ -100,6 +102,7 @@ Edit files in the `extension/` directory based on your feature:
 | New UI controls | `popup.html`, `popup.js`, `styles.css` |
 | New settings | `popup.js` (add to loadSettings/saveSettings) |
 | Content extraction logic | `content.js` |
+| Reddit post/comment output | `reddit.js` |
 | Keyboard shortcuts | `background.js`, `manifest.json` |
 | Permissions | `manifest.json` |
 
@@ -176,6 +179,28 @@ git push origin feature/your-feature-name
 | `configureTurndownService(settings)` | Configure Markdown conversion rules |
 | `cleanContent(content, settings)` | Remove unwanted elements |
 | `extractAndReplaceIframes...()` | Handle iframe content extraction |
+
+### Reddit Extractor (`reddit.js`)
+
+`convertToMarkdown()` hands Reddit URLs to `LLMFeederReddit.convert()` before the
+Readability path runs, because Readability drops the comment tree entirely.
+
+| Function | Purpose |
+|----------|---------|
+| `getPageType(location)` | `'post'`, `'listing'`, or `null` (null = generic pipeline) |
+| `convert(settings, deps)` | Entry point; returns `{ markdown, articleData }` or `null` |
+| `renderThread(json)` | Post header + body + nested comment tree |
+| `renderListing(json)` | Numbered index of posts/comments on feeds and profiles |
+| `extractFromDom(...)` | Fallback scraper for `shreddit-*` and old.reddit markup |
+
+Primary source is `<permalink>.json` fetched **same-origin** from the content
+script, so no extra host permission is needed and the user's session (private
+subs, logged-in sorts) applies. If that returns HTML (bot check / login wall) or
+fails, the DOM fallback runs; if both fail, conversion errors out with a
+Reddit-specific message rather than silently degrading.
+
+Relevant settings: `redditMode` (default on), `redditCommentSort`
+(`confidence` = Best), `redditMaxComments` (number or `'all'`).
 
 ### Popup Script (`popup.js`) - Key Functions
 
@@ -480,6 +505,9 @@ git push origin v2.2.1
 | `metadataFormat` | string | "---\nSource: [{title}]({url})" | Metadata template |
 | `debugMode` | boolean | false | Enable debug logging |
 | `triggerLazyLoading` | boolean | false | Auto-scroll chat/AI surfaces before extraction |
+| `redditMode` | boolean | true | Use the Reddit extractor on reddit.com |
+| `redditCommentSort` | string | "confidence" | Reddit comment sort (`confidence`, `top`, `new`, `controversial`, `old`, `qa`) |
+| `redditMaxComments` | number\|string | 250 | Comment ceiling per thread; `"all"` for no cap |
 
 ### Metadata Template Variables
 

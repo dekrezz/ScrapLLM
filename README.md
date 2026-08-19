@@ -64,6 +64,7 @@ This architecture ensures that your content remains exclusively on your device t
 ## Features
 
 - **Multi-Tab Support**: Convert multiple selected tabs at once - merge into single file or download as ZIP
+- **Reddit Mode**: On Reddit, copies the post *and* its full comment tree — subreddit, flair, score, author, nesting — instead of the article-only extraction
 - **Lazy-Loading Auto-Scroll**: Opt-in scroll pass for chat/AI UIs so long conversations aren't truncated
 - **Alternative Copy Mode**: One-click Full Page / Main Content override from the copy button
 - **Right-Click Context Menus**: Quick conversion access from anywhere on a page
@@ -215,6 +216,11 @@ Users can customize keyboard shortcuts by following these steps:
   - Reset to default format with one click
   - Predictable WYSIWYG formatting
 
+- **Reddit**:
+  - Reddit mode on/off (on by default)
+  - Comment sort: Best / Top / New / Controversial / Old / Q&A
+  - Max comments per thread: 50 / 100 / 250 / 500 / All
+
 - **Output Options**:
   - Copy to clipboard
   - Download as .md file
@@ -247,6 +253,7 @@ LLMFeeder/
 │   ├── popup.js               # Controls popup behavior and user interactions
 │   ├── styles.css             # Styling for the popup UI
 │   ├── content.js             # Content script that runs on web pages
+│   ├── reddit.js              # Reddit-specific extraction (post + comment tree)
 │   └── background.js          # Background script for keyboard shortcuts
 │
 ├── scripts/                   # Build and utility scripts
@@ -264,6 +271,7 @@ LLMFeeder/
 - **manifest.json**: Defines extension metadata, permissions, and configuration
 - **popup.html/js/css**: Creates the user interface when you click the extension icon
 - **content.js**: Contains the core functionality to extract and convert web content to Markdown
+- **reddit.js**: Renders Reddit threads and listings from Reddit's own JSON (with a DOM fallback) so comments survive the conversion
 - **background.js**: Handles keyboard shortcuts and global extension functionality
 - **readability.js**: Mozilla's library that identifies and extracts the main content from a webpage
 - **turndown.js**: Converts HTML to Markdown with configurable options

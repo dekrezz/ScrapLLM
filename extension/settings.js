@@ -19,7 +19,14 @@ const SettingsUtils = (function() {
       // Off by default. Triggers a scroll-pass on lazy-loading surfaces (chat
       // UIs, virtualised feeds) before extraction. Has visible side effects
       // (page movement, optional footer warning) so users opt in explicitly.
-      triggerLazyLoading: false
+      triggerLazyLoading: false,
+      // Reddit-aware extraction: renders the post plus its comment tree from
+      // Reddit's own JSON instead of letting Readability drop the discussion.
+      redditMode: true,
+      // Comment sort passed to Reddit ('confidence' is what the UI calls "Best")
+      redditCommentSort: 'confidence',
+      // Comment ceiling per thread; 'all' means no cap.
+      redditMaxComments: 250
     });
   }
 

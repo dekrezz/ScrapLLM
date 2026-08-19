@@ -138,6 +138,9 @@ const resetMetadataFormatBtn = document.getElementById("resetMetadataFormat");
 const debugModeCheckbox = document.getElementById("debugMode");
 const copyLogsBtn = document.getElementById("copyLogsBtn");
 const triggerLazyLoadingCheckbox = document.getElementById("triggerLazyLoading");
+const redditModeCheckbox = document.getElementById("redditMode");
+const redditCommentSortSelect = document.getElementById("redditCommentSort");
+const redditMaxCommentsSelect = document.getElementById("redditMaxComments");
 
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
@@ -367,6 +370,9 @@ async function loadSettings() {
     metadataFormatTextarea.value = data.metadataFormat;
     debugModeCheckbox.checked = data.debugMode;
     triggerLazyLoadingCheckbox.checked = data.triggerLazyLoading === true;
+    redditModeCheckbox.checked = data.redditMode !== false;
+    redditCommentSortSelect.value = data.redditCommentSort;
+    redditMaxCommentsSelect.value = String(data.redditMaxComments);
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
     tokenContextLimitSelect.value = tokenSettings.tokenContextLimit.toString();
 
@@ -394,6 +400,9 @@ async function saveSettings() {
     const metadataFormat = metadataFormatTextarea.value;
     const debugMode = debugModeCheckbox.checked;
     const triggerLazyLoading = triggerLazyLoadingCheckbox.checked;
+    const redditMode = redditModeCheckbox.checked;
+    const redditCommentSort = redditCommentSortSelect.value;
+    const redditMaxComments = redditMaxCommentsSelect.value;
     const showTokenCount = showTokenCountCheckbox.checked;
     const tokenContextLimit = parseInt(tokenContextLimitSelect.value, 10);
 
@@ -407,6 +416,9 @@ async function saveSettings() {
       metadataFormat,
       debugMode,
       triggerLazyLoading,
+      redditMode,
+      redditCommentSort,
+      redditMaxComments,
       showTokenCount,
       tokenContextLimit,
     });
@@ -724,6 +736,9 @@ function getCurrentSettings() {
     metadataFormat: metadataFormatTextarea.value,
     debugMode: debugModeCheckbox.checked,
     triggerLazyLoading: triggerLazyLoadingCheckbox.checked,
+    redditMode: redditModeCheckbox.checked,
+    redditCommentSort: redditCommentSortSelect.value,
+    redditMaxComments: redditMaxCommentsSelect.value,
   };
 }
 
@@ -843,6 +858,9 @@ async function convertToMarkdown(scopeOverride) {
     const metadataFormat = metadataFormatTextarea.value;
     const debugMode = debugModeCheckbox.checked;
     const triggerLazyLoading = triggerLazyLoadingCheckbox.checked;
+    const redditMode = redditModeCheckbox.checked;
+    const redditCommentSort = redditCommentSortSelect.value;
+    const redditMaxComments = redditMaxCommentsSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -857,6 +875,9 @@ async function convertToMarkdown(scopeOverride) {
         metadataFormat,
         debugMode,
         triggerLazyLoading,
+        redditMode,
+        redditCommentSort,
+        redditMaxComments,
       },
     });
 
@@ -929,6 +950,9 @@ async function downloadMarkdown() {
     const metadataFormat = metadataFormatTextarea.value;
     const debugMode = debugModeCheckbox.checked;
     const triggerLazyLoading = triggerLazyLoadingCheckbox.checked;
+    const redditMode = redditModeCheckbox.checked;
+    const redditCommentSort = redditCommentSortSelect.value;
+    const redditMaxComments = redditMaxCommentsSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -943,6 +967,9 @@ async function downloadMarkdown() {
         metadataFormat,
         debugMode,
         triggerLazyLoading,
+        redditMode,
+        redditCommentSort,
+        redditMaxComments,
       },
     });
 
@@ -1117,6 +1144,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveSettings();
   });
   triggerLazyLoadingCheckbox.addEventListener("change", saveSettings);
+  redditModeCheckbox.addEventListener("change", saveSettings);
+  redditCommentSortSelect.addEventListener("change", saveSettings);
+  redditMaxCommentsSelect.addEventListener("change", saveSettings);
 
   // Metadata format settings
   includeMetadataCheckbox.addEventListener("change", () => {

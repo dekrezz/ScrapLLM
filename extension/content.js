@@ -545,8 +545,36 @@
       includeImages: settings.includeImages,
       includeTitle: settings.includeTitle,
       includeLinks: settings.includeLinks,
-      triggerLazyLoading: settings.triggerLazyLoading === true
+      triggerLazyLoading: settings.triggerLazyLoading === true,
+      redditMode: settings.redditMode !== false
     });
+
+    // Reddit pages: Readability keeps the post body but drops the comment tree
+    // (collapsed/virtualised nodes are never in the extracted article), so
+    // threads and listings go through the dedicated Reddit extractor instead.
+    if (settings.redditMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof LLMFeederReddit !== 'undefined' &&
+        LLMFeederReddit.isRedditPage(window.location)) {
+      const redditPageType = LLMFeederReddit.getPageType(window.location);
+      DebugLog.log('Reddit page detected', { pageType: redditPageType });
+      const reddit = await LLMFeederReddit.convert(settings, {
+        logger: {
+          log: (message, data) => DebugLog.log(message, data),
+          error: (message, error) => DebugLog.error(message, error)
+        },
+        createTurndown: () => configureTurndownService(settings)
+      });
+      if (reddit) {
+        // The Reddit renderer already emits its own H1 title, so includeTitle
+        // is intentionally not applied a second time here.
+        return postProcessMarkdown(reddit.markdown, settings, reddit.articleData);
+      }
+      // convert() returns null for Reddit routes with nothing to render
+      // (empty feed, profile with no activity); fall through to the generic
+      // extraction below.
+      DebugLog.log('Reddit extractor returned no content; using generic extraction');
+    }
 
     // Detect and handle lazy-loaded content before extraction.
     // The detector itself is gated on the user setting so we don't pay for
