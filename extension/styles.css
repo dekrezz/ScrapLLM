@@ -446,9 +446,9 @@ a.icon-btn {
   gap: var(--gap-sm);
   width: 100%;
   min-height: 3rem;
-  padding: 0.6875rem 1.125rem;
+  padding: 0.6875rem 1.25rem;
   border: none;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-pill);
   font-size: 0.9375rem;
   font-weight: 600;
   letter-spacing: -0.01em; /* the label grew, so the tracking tightens with it */
@@ -567,7 +567,7 @@ a.icon-btn {
   /* One continuous key: the seam is a hairline of light on the caret, not a
      gap showing the background through the middle of the control. */
   gap: 0;
-  border-radius: var(--r-xl);
+  border-radius: var(--r-pill);
 }
 
 .split-btn .primary-btn {
@@ -576,22 +576,22 @@ a.icon-btn {
 
 .split-btn-main {
   flex: 1;
-  border-top-left-radius: var(--r-xl);
-  border-bottom-left-radius: var(--r-xl);
-  border-top-right-radius: var(--r-xs);
-  border-bottom-right-radius: var(--r-xs);
+  border-top-left-radius: var(--r-pill);
+  border-bottom-left-radius: var(--r-pill);
+  border-top-right-radius: var(--r-sm);
+  border-bottom-right-radius: var(--r-sm);
   /* The label group stays optically centred despite the caret on the right */
-  padding-left: 1.5rem;
+  padding-left: 1.75rem;
 }
 
 .split-btn-caret {
   width: 2.875rem;
   min-width: 2.875rem;
   padding: 0;
-  border-top-right-radius: var(--r-xl);
-  border-bottom-right-radius: var(--r-xl);
-  border-top-left-radius: var(--r-xs);
-  border-bottom-left-radius: var(--r-xs);
+  border-top-right-radius: var(--r-pill);
+  border-bottom-right-radius: var(--r-pill);
+  border-top-left-radius: var(--r-sm);
+  border-bottom-left-radius: var(--r-sm);
   margin-left: 2px;
   box-shadow:
     inset 1px 0 0 rgba(255, 255, 255, 0.26),
@@ -606,8 +606,8 @@ a.icon-btn {
 }
 
 .split-btn.no-menu .split-btn-main {
-  border-radius: var(--r-xl);
-  padding-left: 1.125rem;
+  border-radius: var(--r-pill);
+  padding-left: 1.25rem;
 }
 
 .caret-icon {
