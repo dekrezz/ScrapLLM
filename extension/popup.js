@@ -147,8 +147,6 @@ const tokenCountValue = document.getElementById("tokenCountValue");
 const tokenWarning = document.getElementById("tokenWarning");
 const showTokenCountCheckbox = document.getElementById("showTokenCount");
 
-// Tagline element
-const tagline = document.getElementById("tagline");
 
 // Current token count for display
 let currentTokenCount = 0;
@@ -310,19 +308,11 @@ function updateTokenDisplay(count, limit) {
 
   const percentage = Math.min((count / limit) * 100, 100);
 
-  // Show/hide counter and tagline
+  // Show/hide the counter
   if (showTokenCountCheckbox.checked) {
     tokenCounter.classList.remove('hidden');
-    // Hide tagline with animation when token counter is shown
-    if (tagline) {
-      tagline.classList.add('hidden');
-    }
   } else {
     tokenCounter.classList.add('hidden');
-    // Show tagline when token counter is hidden
-    if (tagline) {
-      tagline.classList.remove('hidden');
-    }
   }
 
   // Update warning message
@@ -344,10 +334,6 @@ function updateTokenDisplay(count, limit) {
  */
 function hideTokenDisplay() {
   tokenCounter.classList.add('hidden');
-  // Show tagline when token counter is hidden
-  if (tagline) {
-    tagline.classList.remove('hidden');
-  }
 }
 
 // Show proper keyboard shortcuts based on OS
@@ -625,7 +611,6 @@ function updateDebugModeVisibility() {
   }
 }
 
-// Get appropriate store URL based on browser
 // Multi-tab functionality
 
 // Detect highlighted tabs and update UI

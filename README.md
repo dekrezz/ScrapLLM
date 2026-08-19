@@ -2,7 +2,7 @@
 
 Browser extension that turns whatever is on screen into clean Markdown, ready to paste into an LLM. One click for a page, one for a highlighted fragment, one for a whole chat transcript.
 
-Chrome and Firefox. Everything runs locally — no account, no server, no telemetry.
+Chrome and Firefox. Conversion happens entirely in your browser — no account, no telemetry, and page content is never sent anywhere. (The optional token counter fetches static tokenizer data from `tiktoken.pages.dev` once and caches it; everything else is offline.)
 
 ---
 
@@ -67,17 +67,21 @@ Rebind them at `chrome://extensions/shortcuts` or in Firefox's add-on manager.
 
 ```
 extension/
-├── manifest.json     Extension manifest (MV3; the build rewrites it for Firefox)
-├── popup.html/js     Popup UI and settings
-├── styles.css        Design system: materials, typography, themes, a11y
-├── motion.js         Springs, gestures, momentum, press feedback
-├── content.js        Core extraction and Markdown conversion
-├── selection.js      Highlighted-fragment excerpts (code vs prose, line range)
-├── chat.js           LLM conversation export (site API + DOM fallback)
-├── reddit.js         Reddit threads and listings
-├── x.js              X threads, profiles and timelines
-├── background.js     Keyboard shortcuts, context menus, multi-tab work
-└── libs/             Readability, Turndown, JSZip, browser-polyfill
+├── manifest.json        Extension manifest (MV3; the build rewrites it for Firefox)
+├── popup.html/js        Popup UI and settings
+├── settings.js          Shared setting defaults, used by popup and background
+├── styles.css           Design system: materials, typography, themes, a11y
+├── motion.js            Springs, gestures, momentum, press feedback
+├── content.js           Core extraction and Markdown conversion
+├── selection.js         Highlighted-fragment excerpts (code vs prose, line range)
+├── chat.js              LLM conversation export (site API + DOM fallback)
+├── reddit.js            Reddit threads and listings
+├── x.js                 X threads, profiles and timelines
+├── multi-tab-utils.js   Multi-tab batching, filenames, ZIP naming
+├── token-counter.js     Token estimation
+├── background.js        Keyboard shortcuts, context menus, multi-tab work
+├── icons/               Extension icons (16, 48, 128, 1024)
+└── libs/                Readability, Turndown, JSZip, browser-polyfill
 ```
 
 ## Build

@@ -13,14 +13,12 @@ DIST_DIR="$ROOT_DIR/dist"
 TEMP_DIR="$ROOT_DIR/.tmp-build"
 EXT_DIR="$ROOT_DIR/extension"
 
-# Process command line arguments
-if [ $# -gt 0 ]; then
+# Process command line arguments. Every argument is consumed, so the target can
+# follow --version (`build.sh --version 2.3.0 chrome`) instead of being dropped.
+while [ $# -gt 0 ]; do
   case "$1" in
-    "chrome"|"firefox"|"source")
+    "chrome"|"firefox"|"source"|"all")
       TARGET="$1"
-      ;;
-    "all")
-      TARGET="all"
       ;;
     "--help"|"-h")
       echo "Usage: $0 [chrome|firefox|source|all]"
@@ -29,7 +27,7 @@ if [ $# -gt 0 ]; then
       echo "  source  - Build source package only"
       echo "  all     - Build all packages (default)"
       echo ""
-      echo "  --version VERSION - Set version number (default: 1.0.1)"
+      echo "  --version VERSION - Set version number (default: $VERSION)"
       echo "  --help|-h         - Show this help message"
       exit 0
       ;;
@@ -49,7 +47,7 @@ if [ $# -gt 0 ]; then
       ;;
   esac
   shift
-fi
+done
 
 # Create distribution directory if it doesn't exist
 mkdir -p "$DIST_DIR"
@@ -97,7 +95,7 @@ build_chrome() {
   # Create directories and copy additional files
   mkdir -p "$CHROME_DIR/icons"
   mkdir -p "$CHROME_DIR/libs"
-  cp "$EXT_DIR/icons/"* "$CHROME_DIR/icons/" 2>/dev/null
+  cp "$EXT_DIR/icons/icon16.png" "$EXT_DIR/icons/icon48.png" "$EXT_DIR/icons/icon128.png" "$CHROME_DIR/icons/" 2>/dev/null
   cp "$EXT_DIR/libs/"* "$CHROME_DIR/libs/" 2>/dev/null
   
   # Create Chrome-specific manifest
@@ -167,7 +165,7 @@ build_firefox() {
   # Create directories and copy additional files
   mkdir -p "$FIREFOX_DIR/icons"
   mkdir -p "$FIREFOX_DIR/libs"
-  cp "$EXT_DIR/icons/"* "$FIREFOX_DIR/icons/" 2>/dev/null
+  cp "$EXT_DIR/icons/icon16.png" "$EXT_DIR/icons/icon48.png" "$EXT_DIR/icons/icon128.png" "$FIREFOX_DIR/icons/" 2>/dev/null
   cp "$EXT_DIR/libs/"* "$FIREFOX_DIR/libs/" 2>/dev/null
   
   # Create Firefox-specific manifest with required settings
