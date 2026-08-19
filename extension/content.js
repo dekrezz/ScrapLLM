@@ -15,7 +15,6 @@
   };
 
   const CONVERSION_TIMEOUT = 15000; // 15 seconds baseline (extended dynamically when scrolling lazy-loaded pages)
-  const MIN_CONTENT_LENGTH = 50; // Minimum meaningful content length
   const MAX_DEBUG_LOG_ENTRIES = 500; // Keep memory usage in check
   const SCROLL_LOAD_DELAY = 300; // ms to wait after scroll for content to load
   const MAX_SCROLL_ATTEMPTS = 50; // Maximum scroll iterations per container
@@ -181,15 +180,7 @@
           clearTimeout(timeoutId);
           
           // Calculate token count estimation for response
-          let tokenCount = 0;
-          try {
-            // Rough estimation: ~0.75 tokens per word, ~1 token per 4 chars
-            const wordCount = markdown.split(/\s+/).filter(w => w.length > 0).length;
-            const charCount = markdown.length;
-            tokenCount = Math.ceil(Math.max(wordCount * 0.75, charCount / 4));
-          } catch (e) {
-            console.error('Token estimation error:', e);
-          }
+          const tokenCount = ScrapLLMConvert.estimateTokens(markdown);
           
           sendResponse({ success: true, markdown, tokenCount });
         } catch (error) {
@@ -565,6 +556,13 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  // The core takes the source URL and title as data rather than reading the
+  // ambient document, because in the background paths the ambient document is
+  // the extension's own page.
+  function pageContext() {
+    return { url: window.location.href, title: document.title };
+  }
+
   // ==========================================================================
   // MAIN CONVERSION FUNCTION
   // ==========================================================================
@@ -596,12 +594,13 @@
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
         },
-        createTurndown: () => configureTurndownService(settings)
+        createTurndown: () => ScrapLLMConvert.configureTurndownService(settings)
       });
       if (reddit) {
         // The Reddit renderer already emits its own H1 title, so includeTitle
         // is intentionally not applied a second time here.
-        return postProcessMarkdown(reddit.markdown, settings, reddit.articleData);
+        return ScrapLLMConvert.postProcessMarkdown(
+          reddit.markdown, settings, reddit.articleData, pageContext());
       }
       // convert() returns null for Reddit routes with nothing to render
       // (empty feed, profile with no activity); fall through to the generic
@@ -623,12 +622,13 @@
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
         },
-        createTurndown: () => configureTurndownService(settings)
+        createTurndown: () => ScrapLLMConvert.configureTurndownService(settings)
       });
       if (x) {
         // The X renderer already emits its own H1 title, so includeTitle is
         // intentionally not applied a second time here.
-        return postProcessMarkdown(x.markdown, settings, x.articleData);
+        return ScrapLLMConvert.postProcessMarkdown(
+          x.markdown, settings, x.articleData, pageContext());
       }
       // convert() returns null for X routes with nothing to render (login
       // wall, empty timeline); fall through to the generic extraction below.
@@ -673,10 +673,11 @@
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
         },
-        createTurndown: () => configureTurndownService(settings)
+        createTurndown: () => ScrapLLMConvert.configureTurndownService(settings)
       });
       if (chat) {
-        return postProcessMarkdown(chat.markdown, settings, chat.articleData);
+        return ScrapLLMConvert.postProcessMarkdown(
+          chat.markdown, settings, chat.articleData, pageContext());
       }
       throw new Error('No conversation could be extracted from this page');
     }
@@ -689,130 +690,52 @@
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
         },
-        createTurndown: () => configureTurndownService(settings)
+        createTurndown: () => ScrapLLMConvert.configureTurndownService(settings)
       });
       if (excerpt) {
         // The header already names the source, so the metadata block would
         // repeat it.
         const excerptSettings = Object.assign({}, settings, { includeMetadata: false });
-        return postProcessMarkdown(excerpt.markdown, excerptSettings, excerpt.articleData);
+        return ScrapLLMConvert.postProcessMarkdown(
+          excerpt.markdown, excerptSettings, excerpt.articleData, pageContext());
       }
       throw new Error('No text is selected');
     }
 
-    const docClone = document.cloneNode(true);
-    let content;
-    let articleData = null;
-    
-    switch (settings.contentScope) {
-      case 'fullPage':
-        content = extractFullPageContent(docClone);
-        break;
-      case 'selection':
-        content = extractSelectedContent();
-        break;
-      case 'mainContent':
-      default:
-        const result = extractMainContent(docClone);
-        content = result.content;
-        articleData = result.articleData;
-        break;
+    // Only warn when we have evidence the scroll-pass changed the rendered
+    // content. Emitting this for every positive detector hit is noisier
+    // than helpful on pages that use ARIA logs for non-lazy content.
+    const appendNotes = [];
+    if (lazyLoadInfo.isLazyLoaded && scrollResult.scrolled &&
+        (scrollResult.heightDelta > 0 || scrollResult.contentChanged)) {
+      appendNotes.push(`\n\n---\n> **Note:** This page uses dynamic content loading (virtual scrolling). The extension scrolled to load all visible content, but some may still be missing if it wasn't rendered in the DOM. For long conversations or feeds, try scrolling through the entire content manually before converting.\n`);
+      DebugLog.log('Added lazy load warning', { scrollResult, reason: lazyLoadInfo.reason });
     }
 
-    if (!content) {
-      DebugLog.log('Content extraction failed');
-      throw new Error('No content could be extracted');
-    }
+    const converted = ScrapLLMConvert.convertDocument({
+      doc: document,
+      url: window.location.href,
+      title: document.title,
+      settings,
+      live: true,
+      logger: {
+        log: (message, data) => DebugLog.log(message, data),
+        error: (message, error) => DebugLog.error(message, error)
+      },
+      extractSelection: extractSelectedContent,
+      appendNotes
+    });
 
-    DebugLog.log('Content extracted', { innerHTMLLength: content.innerHTML?.length || 0 });
-
-    const contentSize = content.innerHTML.length;
-    if (contentSize > 1000000) {
-      console.warn('Large content detected:', contentSize, 'bytes');
-      DebugLog.log('Large content detected', { size: contentSize });
-    }
-
-    // Extract iframes BEFORE running cleanContent (which removes them)
-    // For mainContent scope, we need to extract from original document since Readability may remove iframes
-    let iframeWarnings = [];
-    if (settings.contentScope === 'mainContent') {
-      iframeWarnings = extractAndReplaceIframesFromOriginal(content);
-    }
-    
-    const cleanWarnings = cleanContent(content, settings);
-    iframeWarnings = iframeWarnings.concat(cleanWarnings);
-
-    DebugLog.log('Iframe warnings', { count: iframeWarnings.length, types: iframeWarnings.map(w => w.type) });
-
-    const turndownService = configureTurndownService(settings);
-
-    try {
-      let markdown = turndownService.turndown(content);
-
-      if (!markdown || markdown.trim() === '') {
-        throw new Error('Conversion resulted in empty markdown');
-      }
-
-      DebugLog.log('Conversion successful', {
-        markdownLength: markdown.length,
-        hasTables: markdown.includes('|---')
-      });
-
-      if (settings.includeTitle) {
-        const pageTitle = document.title.trim();
-        if (pageTitle.length > 0) {
-          markdown = `# ${pageTitle}\n\n${markdown}`;
-        }
-      }
-
-      const iframeWarning = iframeWarnings.find(w => w.type === 'crossOriginIframe');
-      if (iframeWarning) {
-        const warningText = `\n\n---\n> **Note:** This page contains ${iframeWarning.count} cross-origin iframe(s) that could not be accessed due to browser security policies. Some content may be missing. Links to these iframes have been preserved where possible.\n`;
-        markdown += warningText;
-        DebugLog.log('Added iframe warning', { count: iframeWarning.count });
-      }
-
-      // Only warn when we have evidence the scroll-pass changed the rendered
-      // content. Emitting this for every positive detector hit is noisier
-      // than helpful on pages that use ARIA logs for non-lazy content.
-      if (lazyLoadInfo.isLazyLoaded && scrollResult.scrolled &&
-          (scrollResult.heightDelta > 0 || scrollResult.contentChanged)) {
-        const lazyLoadWarning = `\n\n---\n> **Note:** This page uses dynamic content loading (virtual scrolling). The extension scrolled to load all visible content, but some may still be missing if it wasn't rendered in the DOM. For long conversations or feeds, try scrolling through the entire content manually before converting.\n`;
-        markdown += lazyLoadWarning;
-        DebugLog.log('Added lazy load warning', { scrollResult, reason: lazyLoadInfo.reason });
-      }
-
-      return postProcessMarkdown(markdown, settings, articleData);
-    } catch (error) {
-      DebugLog.error('Conversion failed', error);
-      console.error('Turndown conversion error:', error);
-
-      if (contentSize > 100000) {
-        const simplifiedContent = document.createElement('div');
-        simplifiedContent.innerHTML = content.innerHTML.substring(0, 100000);
-        return turndownService.turndown(simplifiedContent) +
-               '\n\n---\n*Note: Content was truncated due to size limitations.*';
-      }
-
-      throw error;
-    }
+    return converted.markdown;
   }
 
   // ==========================================================================
   // CONTENT EXTRACTION FUNCTIONS
   // ==========================================================================
-
-  function extractFullPageContent(doc) {
-    const scripts = doc.getElementsByTagName('script');
-    const styles = doc.getElementsByTagName('style');
-    for (let i = scripts.length - 1; i >= 0; i--) {
-      scripts[i].parentNode.removeChild(scripts[i]);
-    }
-    for (let i = styles.length - 1; i >= 0; i--) {
-      styles[i].parentNode.removeChild(styles[i]);
-    }
-    return doc.body;
-  }
+  //
+  // Everything that does not need the live page lives in convert-core.js, so
+  // the background can run the identical conversion on fetched HTML. What is
+  // left here is what only a rendered page can answer.
 
   function extractSelectedContent() {
     const selection = window.getSelection();
@@ -823,574 +746,6 @@
     const range = selection.getRangeAt(0);
     container.appendChild(range.cloneContents());
     return container;
-  }
-
-  function extractMainContent(doc) {
-    try {
-      const documentClone = doc.implementation.createHTMLDocument('Article');
-      documentClone.documentElement.innerHTML = doc.documentElement.innerHTML;
-      const reader = new Readability(documentClone);
-      const article = reader.parse();
-      
-      if (!article || !article.content) {
-        throw new Error('Could not extract main content');
-      }
-      
-      const container = document.createElement('div');
-      container.innerHTML = article.content;
-      
-      return {
-        content: container,
-        articleData: {
-          title: article.title || document.title,
-          author: article.byline || extractAuthorFromMeta(),
-          siteName: article.siteName || extractSiteNameFromMeta(),
-          publishedTime: article.publishedTime || extractPublishedDateFromMeta(),
-          excerpt: article.excerpt || ''
-        }
-      };
-    } catch (error) {
-      console.error('Readability error:', error);
-      DebugLog.error('Readability error', error);
-      return {
-        content: fallbackContentExtraction(doc),
-        articleData: null
-      };
-    }
-  }
-
-  function fallbackContentExtraction(doc) {
-    const container = document.createElement('div');
-    const mainContent = doc.querySelector('main') || 
-                        doc.querySelector('article') || 
-                        doc.querySelector('.content') || 
-                        doc.querySelector('#content') ||
-                        doc.body;
-    container.appendChild(mainContent.cloneNode(true));
-    return container;
-  }
-
-  function extractAuthorFromMeta() {
-    const authorSelectors = [
-      'meta[name="author"]',
-      'meta[property="article:author"]',
-      'meta[name="dcterms.creator"]',
-      'meta[name="DC.creator"]',
-      'meta[property="og:author"]'
-    ];
-    for (const selector of authorSelectors) {
-      const metaTag = document.querySelector(selector);
-      if (metaTag && metaTag.content) {
-        return metaTag.content.trim();
-      }
-    }
-    return '';
-  }
-
-  function extractSiteNameFromMeta() {
-    const siteNameSelectors = [
-      'meta[property="og:site_name"]',
-      'meta[name="application-name"]',
-      'meta[name="apple-mobile-web-app-title"]'
-    ];
-    for (const selector of siteNameSelectors) {
-      const metaTag = document.querySelector(selector);
-      if (metaTag && metaTag.content) {
-        return metaTag.content.trim();
-      }
-    }
-    try {
-      return new URL(window.location.href).hostname;
-    } catch {
-      return '';
-    }
-  }
-
-  function extractPublishedDateFromMeta() {
-    const dateSelectors = [
-      'meta[property="article:published_time"]',
-      'meta[name="dcterms.created"]',
-      'meta[name="DC.date.created"]',
-      'meta[name="date"]',
-      'meta[property="og:published_time"]',
-      'time[datetime]',
-      'time[pubdate]'
-    ];
-    for (const selector of dateSelectors) {
-      const element = document.querySelector(selector);
-      if (element) {
-        const dateValue = element.getAttribute('content') || 
-                         element.getAttribute('datetime') || 
-                         element.textContent;
-        if (dateValue) {
-          try {
-            const date = new Date(dateValue.trim());
-            if (!isNaN(date.getTime())) {
-              return date.toISOString().split('T')[0];
-            }
-          } catch {
-            return dateValue.trim();
-          }
-        }
-      }
-    }
-    return '';
-  }
-
-  // ==========================================================================
-  // IFRAME CONTENT EXTRACTION
-  // ==========================================================================
-
-  // Same-origin frames (including srcdoc) are read through the DOM.
-  // Cross-origin frames stay behind the browser's origin checks: we keep a
-  // link/warning instead of asking another window to echo its HTML.
-
-  function isHttpOrHttpsUrl(src) {
-    if (!src || typeof src !== 'string') {
-      return false;
-    }
-    // Require an explicit http(s) URL so srcdoc HTML cannot be resolved as
-    // a relative path against the page.
-    if (!/^https?:\/\//i.test(src.trim())) {
-      return false;
-    }
-    try {
-      const url = new URL(src);
-      return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch (e) {
-      return false;
-    }
-  }
-
-  function iframeFallbackInfo(iframe, iframeSrc) {
-    return {
-      src: iframeSrc,
-      title: iframe.title || iframe.getAttribute('aria-label') || 'Embedded content'
-    };
-  }
-
-  function createIframePlaceholder(iframeSrc, iframeTitle) {
-    const linkDiv = document.createElement('div');
-    linkDiv.className = 'scrapllm-iframe-link';
-    const p = document.createElement('p');
-    p.appendChild(document.createTextNode('[Embedded content: '));
-    const title = iframeTitle || 'Embedded content';
-    if (isHttpOrHttpsUrl(iframeSrc)) {
-      const a = document.createElement('a');
-      a.href = iframeSrc;
-      a.textContent = title;
-      p.appendChild(a);
-    } else {
-      p.appendChild(document.createTextNode(title));
-    }
-    p.appendChild(document.createTextNode(']'));
-    linkDiv.appendChild(p);
-    return linkDiv;
-  }
-
-  function isSameOriginIframe(iframe) {
-    try {
-      if (!iframe.contentWindow) {
-        return false;
-      }
-      const iframeDoc = iframe.contentWindow.document;
-      return !!iframeDoc;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  function isHiddenEmptyIframe(iframe) {
-    return !iframe.offsetParent && !iframe.src && !iframe.srcdoc;
-  }
-
-  function isRemoteIframeSrc(iframe) {
-    return !!(iframe.src && iframe.src !== 'about:blank' && iframe.src !== 'javascript:void(0)');
-  }
-
-  function tryExtractSameOriginIframe(iframe, iframeSrc, index) {
-    const iframeDoc = iframe.contentWindow.document;
-    const iframeBody = iframeDoc.body;
-    const clonedIframeContent = iframeBody.cloneNode(true);
-
-    const scripts = clonedIframeContent.querySelectorAll('script, style, noscript');
-    for (let j = scripts.length - 1; j >= 0; j--) {
-      scripts[j].parentNode.removeChild(scripts[j]);
-    }
-
-    const iframeText = clonedIframeContent.textContent || '';
-    if (iframeText.trim().length <= MIN_CONTENT_LENGTH) {
-      return { skipped: true, contentLength: iframeText.length };
-    }
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'scrapllm-iframe-content';
-    wrapper.setAttribute('data-iframe-src', iframeSrc);
-    wrapper.setAttribute('data-iframe-index', String(index));
-    while (clonedIframeContent.firstChild) {
-      wrapper.appendChild(clonedIframeContent.firstChild);
-    }
-    return { wrapper, contentLength: iframeText.length };
-  }
-
-  function collectIframeExtraction(iframes, logLabel) {
-    const extractedContents = [];
-    const crossOriginIframes = [];
-
-    DebugLog.log(logLabel, {
-      originalIframes: iframes.length
-    });
-
-    for (let i = 0; i < iframes.length; i++) {
-      const iframe = iframes[i];
-      const iframeSrc = iframe.src || iframe.srcdoc || 'about:blank';
-
-      if (isHiddenEmptyIframe(iframe)) {
-        continue;
-      }
-
-      if (isSameOriginIframe(iframe)) {
-        try {
-          const result = tryExtractSameOriginIframe(iframe, iframeSrc, i);
-          if (result.wrapper) {
-            extractedContents.push(result.wrapper);
-            DebugLog.log('Extracted same-origin iframe', {
-              src: iframeSrc.substring(0, 50),
-              contentLength: result.contentLength
-            });
-          } else {
-            DebugLog.log('Iframe skipped (not enough content)', {
-              src: iframeSrc.substring(0, 50),
-              contentLength: result.contentLength
-            });
-          }
-        } catch (e) {
-          DebugLog.error('Same-origin iframe extraction failed', e);
-          if (iframe.src) {
-            crossOriginIframes.push(iframeFallbackInfo(iframe, iframeSrc));
-          }
-        }
-      } else if (isRemoteIframeSrc(iframe)) {
-        crossOriginIframes.push(iframeFallbackInfo(iframe, iframeSrc));
-      }
-    }
-
-    DebugLog.log('Iframe extraction complete', {
-      extracted: extractedContents.length,
-      crossOrigin: crossOriginIframes.length
-    });
-
-    return { extractedContents, crossOriginIframes };
-  }
-
-  function crossOriginIframeWarnings(crossOriginIframes) {
-    if (crossOriginIframes.length === 0) {
-      return [];
-    }
-    return [{
-      type: 'crossOriginIframe',
-      count: crossOriginIframes.length,
-      details: crossOriginIframes.slice(0, 3)
-    }];
-  }
-
-  /**
-   * Extract iframe content from the ORIGINAL document and append to content
-   * This is needed because Readability may remove iframes from the content
-   */
-  function extractAndReplaceIframesFromOriginal(clonedContent) {
-    const originalIframes = Array.from(document.querySelectorAll('iframe'));
-    const { extractedContents, crossOriginIframes } = collectIframeExtraction(
-      originalIframes,
-      'Starting iframe extraction from original document'
-    );
-
-    // For mainContent scope, Readability has already removed iframes, so
-    // append extracted iframe content directly to the cloned article.
-    if (extractedContents.length > 0) {
-      DebugLog.log('Appending extracted iframe content to cloned content', {
-        count: extractedContents.length
-      });
-
-      const iframeSection = document.createElement('div');
-      iframeSection.className = 'scrapllm-iframes';
-
-      extractedContents.forEach((wrapper, index) => {
-        const section = document.createElement('div');
-        section.className = 'scrapllm-iframe-section';
-        section.appendChild(document.createElement('hr'));
-        const heading = document.createElement('h3');
-        heading.textContent = `Embedded Content ${index + 1}`;
-        section.appendChild(heading);
-        section.appendChild(wrapper);
-        iframeSection.appendChild(section);
-      });
-
-      clonedContent.appendChild(iframeSection);
-      DebugLog.log('Appended iframe content to cloned content');
-    }
-
-    return crossOriginIframeWarnings(crossOriginIframes);
-  }
-
-  /**
-   * Extract and replace iframes for fullPage/selection scope
-   * (For these scopes, iframes are still present in the cloned content)
-   */
-  function extractAndReplaceIframesFromCloned(content, preserveIframeLinks) {
-    const originalIframes = Array.from(document.querySelectorAll('iframe'));
-    const { extractedContents, crossOriginIframes } = collectIframeExtraction(
-      originalIframes,
-      'Starting iframe extraction from cloned content'
-    );
-
-    const clonedIframes = Array.from(content.querySelectorAll('iframe'));
-    for (let i = 0; i < clonedIframes.length; i++) {
-      const iframe = clonedIframes[i];
-      const iframeSrc = iframe.src || iframe.srcdoc || 'about:blank';
-
-      const extractedContent = extractedContents.find(c =>
-        parseInt(c.getAttribute('data-iframe-index'), 10) === i
-      );
-
-      if (extractedContent) {
-        const replacementDiv = document.createElement('div');
-        replacementDiv.className = 'scrapllm-iframe-replacement';
-        while (extractedContent.firstChild) {
-          replacementDiv.appendChild(extractedContent.firstChild);
-        }
-        iframe.parentNode.replaceChild(replacementDiv, iframe);
-      } else if (preserveIframeLinks && iframeSrc && iframeSrc !== 'about:blank') {
-        const iframeTitle = iframe.title || iframe.getAttribute('aria-label') || 'Embedded content';
-        iframe.parentNode.replaceChild(createIframePlaceholder(iframeSrc, iframeTitle), iframe);
-      } else {
-        iframe.parentNode.removeChild(iframe);
-      }
-    }
-
-    return crossOriginIframeWarnings(crossOriginIframes);
-  }
-
-  // ==========================================================================
-  // CONTENT CLEANING
-  // ==========================================================================
-
-  function cleanContent(content, settings) {
-    // For fullPage and selection scopes, extract iframes from cloned content
-    // For mainContent scope, this was already done before Readability
-    let iframeWarnings = [];
-    if (settings.contentScope !== 'mainContent') {
-      iframeWarnings = extractAndReplaceIframesFromCloned(content, settings.preserveIframeLinks !== false);
-    }
-
-    // Remove elements that shouldn't be included
-    const elementsToRemove = [
-      'script', 'style', 'noscript',
-      'nav', 'footer', '.comments', '.ads', '.sidebar'
-    ];
-
-    if (!settings.includeImages) {
-      elementsToRemove.push('img', 'picture', 'svg');
-    }
-
-    elementsToRemove.forEach(selector => {
-      const elements = content.querySelectorAll(selector);
-      for (let i = 0; i < elements.length; i++) {
-        if (elements[i].parentNode) {
-          elements[i].parentNode.removeChild(elements[i]);
-        }
-      }
-    });
-
-    // Remove empty paragraphs and divs
-    const emptyElements = content.querySelectorAll('p:empty, div:empty');
-    for (let i = 0; i < emptyElements.length; i++) {
-      emptyElements[i].parentNode.removeChild(emptyElements[i]);
-    }
-
-    makeUrlsAbsolute(content);
-    return iframeWarnings;
-  }
-
-  function makeUrlsAbsolute(content) {
-    const links = content.querySelectorAll('a');
-    for (let i = 0; i < links.length; i++) {
-      if (links[i].href) {
-        try {
-          links[i].href = new URL(links[i].getAttribute('href'), document.baseURI).href;
-        } catch (e) {}
-      }
-    }
-
-    const images = content.querySelectorAll('img');
-    for (let i = 0; i < images.length; i++) {
-      if (images[i].src) {
-        try {
-          images[i].src = new URL(images[i].getAttribute('src'), document.baseURI).href;
-        } catch (e) {}
-      }
-    }
-  }
-
-  // ==========================================================================
-  // TURNDOWN CONFIGURATION
-  // ==========================================================================
-
-  function configureTurndownService(settings) {
-    const turndownService = new TurndownService({
-      headingStyle: 'atx',
-      hr: '---',
-      bulletListMarker: '-',
-      codeBlockStyle: 'fenced',
-      emDelimiter: '*'
-    });
-
-    if (settings.preserveTables) {
-      // Prevent thead and tbody from adding extra newlines
-      turndownService.addRule('thead', {
-        filter: 'thead',
-        replacement: function(content) {
-          return content;
-        }
-      });
-
-      turndownService.addRule('tbody', {
-        filter: 'tbody',
-        replacement: function(content) {
-          return content;
-        }
-      });
-
-      // Add custom table rules before default rules can process them
-      turndownService.addRule('table', {
-        filter: 'table',
-        replacement: function(content, node) {
-          return '\n\n' + content + '\n\n';
-        }
-      });
-
-      turndownService.addRule('tableRow', {
-        filter: 'tr',
-        replacement: function(content, node) {
-          const cells = node.querySelectorAll('th, td');
-          let output = '|' + content + '\n';
-
-          // Check if this row contains th elements (header row)
-          const hasHeaderCell = Array.from(cells).some(cell => cell.nodeName === 'TH');
-
-          // Add separator row after header row
-          if (hasHeaderCell) {
-            const separator = '|' + Array.from(cells).map(() => ' --- |').join('') + '\n';
-            output += separator;
-          }
-
-          return output;
-        }
-      });
-
-      turndownService.addRule('tableCell', {
-        filter: ['th', 'td'],
-        replacement: function(content, node) {
-          return ' ' + content.trim() + ' |';
-        }
-      });
-    }
-
-    if (!settings.includeImages) {
-      turndownService.addRule('images', {
-        filter: 'img',
-        replacement: function() {
-          return '';
-        }
-      });
-    }
-
-    if (!settings.includeLinks) {
-      turndownService.addRule('stripLinks', {
-        filter: function(node) {
-          return node.nodeName === 'A' && node.href;
-        },
-        replacement: function(content, node) {
-          return content;
-        }
-      });
-    }
-
-    turndownService.addRule('fencedCodeBlock', {
-      filter: function(node) {
-        return node.nodeName === 'PRE';
-      },
-      replacement: function(content, node) {
-        const codeElement = node.querySelector('code');
-        const languageClasses = [
-          codeElement?.getAttribute('class') || '',
-          node.getAttribute('class') || ''
-        ].join(' ');
-        const languageMatch = languageClasses.match(/(?:language|lang)-(\S+)/);
-        const languageIdentifier = languageMatch ? languageMatch[1] : '';
-        const codeContainer = (codeElement || node).cloneNode(true);
-
-        // Syntax highlighters often emit <pre><span>...<br>...</span></pre>.
-        // textContent preserves the highlighted text, but <br> needs explicit handling.
-        const lineBreaks = codeContainer.querySelectorAll('br');
-        lineBreaks.forEach(lineBreak => lineBreak.replaceWith('\n'));
-
-        const code = codeContainer.textContent.replace(/\n$/, '');
-        const fenceMatches = code.match(/^`{3,}/gm) || [];
-        const fenceSize = fenceMatches.reduce(
-          (size, fence) => Math.max(size, fence.length + 1),
-          3
-        );
-        const fence = '`'.repeat(fenceSize);
-
-        return (
-          '\n\n' + fence + languageIdentifier + '\n' +
-          code +
-          '\n' + fence + '\n\n'
-        );
-      }
-    });
-
-    return turndownService;
-  }
-
-  function postProcessMarkdown(markdown, settings, articleData) {
-    markdown = markdown.replace(/\n{3,}/g, '\n\n');
-    markdown = markdown.replace(/([^\n])(\n#{1,6} )/g, '$1\n\n$2');
-    markdown = markdown.replace(/(\n[*\-+] [^\n]+)(\n[*\-+] )/g, '$1\n$2');
-
-    if (settings.includeMetadata && settings.metadataFormat) {
-      const metadataText = formatMetadata(settings.metadataFormat, articleData);
-      if (metadataText) {
-        markdown = markdown + '\n\n' + metadataText;
-      }
-    }
-
-    return markdown;
-  }
-
-  function formatMetadata(template, articleData) {
-    try {
-      const metadata = {
-        title: articleData?.title || document.title || 'Untitled',
-        url: window.location.href,
-        date: articleData?.publishedTime || '',
-        author: articleData?.author || '',
-        siteName: articleData?.siteName || new URL(window.location.href).hostname,
-        excerpt: articleData?.excerpt || ''
-      };
-
-      let formatted = template;
-      Object.entries(metadata).forEach(([key, value]) => {
-        const placeholder = new RegExp(`\\{${key}\\}`, 'g');
-        formatted = formatted.replace(placeholder, value);
-      });
-
-      return formatted;
-    } catch (error) {
-      console.error('Error formatting metadata:', error);
-      return `---\nSource: [${document.title || 'Untitled'}](${window.location.href})`;
-    }
   }
 
   // ==========================================================================

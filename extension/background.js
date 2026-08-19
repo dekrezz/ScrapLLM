@@ -1,13 +1,17 @@
 // ScrapLLM Background Script
 // Handles keyboard shortcuts and background tasks
-// Dependencies: libs/jszip.min.js, settings.js, multi-tab-utils.js, search.js
-// and research.js
+// Dependencies: libs/jszip.min.js, settings.js, multi-tab-utils.js, search.js,
+// quiet-capture.js and research.js. Firefox's MV2 background is a real page, so
+// it also loads Readability, Turndown and convert-core.js there and parses
+// fetched research pages in place; Chrome's service worker has no DOM and uses
+// an offscreen document instead.
 // (loaded via manifest in Firefox, or importScripts in Chrome service worker)
 
 // Load dependencies for Chrome service worker (not needed in Firefox)
 if (typeof importScripts === 'function') {
   try {
-    importScripts('libs/jszip.min.js', 'settings.js', 'multi-tab-utils.js', 'search.js', 'research.js');
+    importScripts('libs/jszip.min.js', 'settings.js', 'multi-tab-utils.js', 'search.js',
+                  'quiet-capture.js', 'research.js');
   } catch (e) {
     console.error('Failed to load dependencies:', e);
     throw new Error('Critical dependencies failed to load. Please reinstall the extension.');
@@ -68,8 +72,27 @@ const browserAPI = (function() {
       onInstalled: chrome.runtime.onInstalled,
       onStartup: chrome.runtime.onStartup,
       getURL: chrome.runtime.getURL,
+      // The worker talks to the offscreen parser over runtime messaging: it is
+      // the only extensions API an offscreen document can use.
+      sendMessage: promisify(chrome.runtime.sendMessage, chrome.runtime),
       lastError: chrome.runtime.lastError
     };
+
+    // getContexts is Chrome 116+; research feature-detects it and falls back to
+    // recovering from createDocument's own rejection.
+    if (typeof chrome.runtime.getContexts === 'function') {
+      api.runtime.getContexts = promisify(chrome.runtime.getContexts, chrome.runtime);
+    }
+
+    // chrome.offscreen is Chrome 109+ and MV3 only. Without it the research
+    // engine has no DOM to parse in and every source goes through a tab.
+    if (chrome.offscreen) {
+      api.offscreen = {
+        createDocument: promisify(chrome.offscreen.createDocument, chrome.offscreen),
+        closeDocument: promisify(chrome.offscreen.closeDocument, chrome.offscreen)
+      };
+    }
+
     
     api.storage = {
       sync: {
@@ -629,7 +652,10 @@ browserAPI.runtime.onConnect.addListener((port) => {
         const runId = await ScrapLLMResearch.start({
           query: message.query,
           sourceCount: message.sourceCount,
-          settings: message.settings
+          settings: message.settings,
+          // The popup is the only place that can ask for a host permission
+          // (the request must sit in a user gesture), so it reports the answer.
+          hostAccess: message.hostAccess
         });
         postToPort(port, { type: 'accepted', runId });
       } catch (error) {

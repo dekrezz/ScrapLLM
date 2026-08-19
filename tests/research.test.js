@@ -893,3 +893,405 @@ describe('ScrapLLMResearch document builder', () => {
     expect(match[1]).toHaveLength(40);
   });
 });
+
+// ---------------------------------------------------------------------------
+// quiet-capture.js — the decision table, and the engine driving it
+// ---------------------------------------------------------------------------
+
+const QUIET_PATH = path.join(__dirname, '../extension/quiet-capture.js');
+
+function loadQuietCapture() {
+  jest.resetModules();
+  delete global.ScrapLLMQuietCapture;
+  require(QUIET_PATH);
+  return global.ScrapLLMQuietCapture;
+}
+
+describe('ScrapLLMQuietCapture.fetchSource', () => {
+  function fakeFetch({ status = 200, contentType = 'text/html; charset=utf-8', body = '<html></html>', url, throws }) {
+    return async (requested) => {
+      if (throws) throw throws;
+      return {
+        status,
+        url: url || requested,
+        headers: { get: (name) => (name.toLowerCase() === 'content-type' ? contentType : null) },
+        text: async () => body
+      };
+    };
+  }
+
+  it('returns html for a 2xx text/html answer', async () => {
+    const quiet = loadQuietCapture();
+    const result = await quiet.fetchSource('https://example.com/a', {
+      fetch: fakeFetch({ body: '<html><body>hi</body></html>' })
+    });
+    expect(result).toMatchObject({ kind: 'html', status: 200, html: '<html><body>hi</body></html>' });
+  });
+
+  it('separates an http error from a good answer, keeping the body', async () => {
+    const quiet = loadQuietCapture();
+    const result = await quiet.fetchSource('https://example.com/a', {
+      fetch: fakeFetch({ status: 403, body: 'Just a moment...' })
+    });
+    expect(result.kind).toBe('httpError');
+    expect(result.status).toBe(403);
+  });
+
+  it('never reads the body of a non-HTML answer', async () => {
+    const quiet = loadQuietCapture();
+    let bodyRead = false;
+    const result = await quiet.fetchSource('https://arxiv.org/pdf/1706.03762', {
+      fetch: async (requested) => ({
+        status: 200,
+        url: requested,
+        headers: { get: () => 'application/pdf' },
+        text: async () => { bodyRead = true; return ''; }
+      })
+    });
+    expect(result).toMatchObject({ kind: 'nonHtml', contentType: 'application/pdf' });
+    expect(bodyRead).toBe(false);
+  });
+
+  it('carries a network failure message verbatim instead of throwing', async () => {
+    const quiet = loadQuietCapture();
+    const result = await quiet.fetchSource('https://expired.example', {
+      fetch: fakeFetch({ throws: new Error('certificate has expired') })
+    });
+    expect(result).toEqual({ kind: 'networkError', message: 'certificate has expired' });
+  });
+});
+
+describe('ScrapLLMQuietCapture.classify', () => {
+  it('rejects a PDF with the viewer message rather than opening a tab', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyResponse(
+      { kind: 'nonHtml', status: 200, contentType: 'application/pdf', finalUrl: 'https://a.com/x.pdf' },
+      'https://a.com/x.pdf'
+    );
+    expect(verdict.decision).toBe('reject');
+    expect(verdict.reason).toBe(quiet.PDF_MESSAGE);
+  });
+
+  it('names an unusable content type', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyResponse(
+      { kind: 'nonHtml', status: 200, contentType: 'image/png', finalUrl: 'https://a.com/x.png' },
+      'https://a.com/x.png'
+    );
+    expect(verdict).toEqual({ decision: 'reject', reason: 'Not a web page: image/png' });
+  });
+
+  it('escalates a bot check to a tab, with the status in the reason', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyResponse(
+      { kind: 'httpError', status: 403, contentType: 'text/html', finalUrl: 'https://a.com/x', html: '' },
+      'https://a.com/x'
+    );
+    expect(verdict).toEqual({ decision: 'render', reason: 'Server answered 403, so a tab was opened' });
+  });
+
+  it('escalates a redirect onto a consent host but not an ordinary one', () => {
+    const quiet = loadQuietCapture();
+    const consent = quiet.classifyResponse(
+      { kind: 'html', status: 200, finalUrl: 'https://consent.example.com/?ret=1', html: '' },
+      'https://example.com/article'
+    );
+    expect(consent.decision).toBe('render');
+    expect(consent.reason).toContain('consent.example.com');
+
+    const other = quiet.classifyResponse(
+      { kind: 'html', status: 200, finalUrl: 'https://www.example.com/article', html: '' },
+      'https://example.com/article'
+    );
+    expect(other).toEqual({ decision: 'use', reason: null });
+  });
+
+  it('escalates an empty app shell and a thin extraction, and keeps a real page', () => {
+    const quiet = loadQuietCapture();
+
+    expect(quiet.classifyExtraction({ textLength: 0, bodyTextLength: 46, emptyAppShell: true }).decision)
+      .toBe('render');
+    expect(quiet.classifyExtraction({ textLength: 98, bodyTextLength: 98, emptyAppShell: false }))
+      .toEqual({
+        decision: 'render',
+        reason: 'Server-rendered text was only 98 characters, so a tab was opened'
+      });
+    expect(quiet.classifyExtraction({ textLength: 1385, bodyTextLength: 4000, emptyAppShell: false }))
+      .toEqual({ decision: 'use', reason: null });
+  });
+
+  it('treats a failed parse as an escalation, not as a run failure', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyExtraction({ failed: true, error: 'the parser did not answer within 5 s' });
+    expect(verdict.decision).toBe('render');
+    expect(verdict.reason).toContain('the parser did not answer within 5 s');
+  });
+
+  it('sends Reddit and X to a tab before a byte is fetched', () => {
+    const quiet = loadQuietCapture();
+    expect(quiet.preflight('https://www.reddit.com/r/reactjs/comments/abc/x/', {}).decision).toBe('render');
+    expect(quiet.preflight('https://x.com/someone/status/42', {}).decision).toBe('render');
+    // With the dedicated extractor off there is nothing a tab would add.
+    expect(quiet.preflight('https://www.reddit.com/r/reactjs/comments/abc/x/', { redditMode: false })).toBeNull();
+    expect(quiet.preflight('https://example.com/a', {})).toBeNull();
+  });
+});
+
+describe('ScrapLLMResearch quiet path', () => {
+  const QUIET_TERMINAL = ['done', 'cancelled', 'error', 'empty', 'interrupted'];
+
+  function source(index, extra = {}) {
+    const host = `example${index}.com`;
+    return Object.assign({
+      url: `https://${host}/guides/topic-${index}`,
+      host,
+      title: `Result ${index}`,
+      snippet: `Snippet ${index}`,
+      engineRank: index,
+      score: 20 - index
+    }, extra);
+  }
+
+  function makeApi() {
+    const state = { created: [], live: new Map(), nextId: 100 };
+    const api = {
+      tabs: {
+        query: async () => [{ id: 1, windowId: 7 }],
+        create: async ({ url }) => {
+          const tab = { id: state.nextId++, url, title: `Page title for ${url}` };
+          state.created.push({ id: tab.id, url });
+          state.live.set(tab.id, tab);
+          return tab;
+        },
+        get: async (tabId) => {
+          if (!state.live.has(tabId)) throw new Error(`No tab with id: ${tabId}`);
+          return state.live.get(tabId);
+        },
+        remove: async (tabId) => { state.live.delete(tabId); },
+        update: async () => {},
+        sendMessage: async (tabId, message) => {
+          if (message.action === 'ping') return { success: true };
+          throw new Error(`unexpected action ${message.action}`);
+        }
+      },
+      storage: {}
+    };
+    return { api, state };
+  }
+
+  // The parsing host is stubbed: what matters here is the routing, not
+  // Readability, which convert-core owns and the content-script tests cover.
+  function loadEngine({ results, fetchImpl, convertHtml, convert }) {
+    jest.resetModules();
+    delete global.ScrapLLMResearch;
+    require(MULTITAB_PATH);
+    require(QUIET_PATH);
+
+    global.ScrapLLMSearch = {
+      findSources: async () => ({
+        results, engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null
+      })
+    };
+    global.ScrapLLMConvert = { convertHtml: jest.fn(convertHtml) };
+    global.fetch = jest.fn(fetchImpl);
+
+    require(RESEARCH_PATH);
+    global.MultiTabUtils.convertTabToMarkdown = jest.fn(convert ||
+      (async (tabId) => ({ success: true, markdown: `Rendered body of tab ${tabId}`, tokenCount: 20 })));
+
+    return { engine: global.ScrapLLMResearch };
+  }
+
+  function htmlAnswer(body) {
+    return async (requested) => ({
+      status: 200,
+      url: requested,
+      headers: { get: () => 'text/html; charset=utf-8' },
+      text: async () => body
+    });
+  }
+
+  async function waitForRun(engine) {
+    for (let i = 0; i < 600; i++) {
+      if (QUIET_TERMINAL.includes(engine.getSnapshot().phase)) return;
+      await jest.advanceTimersByTimeAsync(250);
+    }
+    throw new Error('the run never reached the expected state');
+  }
+
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => {
+    jest.useRealTimers();
+    delete global.ScrapLLMSearch;
+    delete global.ScrapLLMConvert;
+    delete global.ScrapLLMQuietCapture;
+    delete global.fetch;
+  });
+
+  it('opens no tab at all when every source answers with a real page', async () => {
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1), source(2), source(3)],
+      fetchImpl: htmlAnswer('<html><body>a real article</body></html>'),
+      convertHtml: ({ url }) => ({
+        markdown: `Body of ${url}`,
+        title: `Title of ${url}`,
+        textLength: 4000,
+        bodyTextLength: 6000,
+        emptyAppShell: false,
+        tokenCount: 30
+      })
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'quiet please', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(state.created).toHaveLength(0);
+    expect(snapshot.succeeded).toBe(3);
+    expect(snapshot.quiet).toBe(3);
+    expect(snapshot.rendered).toBe(0);
+    expect(snapshot.entries.every(entry => entry.path === 'quiet')).toBe(true);
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Capture: 3 fetched without a tab, 0 rendered in a background tab');
+    expect(doc.markdown).toContain('Captured: server-rendered HTML, no tab');
+    expect(doc.markdown).toContain('Note: Captured from the server-rendered HTML; no tab was opened');
+  });
+
+  it('escalates only the source that needs a tab, and says why on that source alone', async () => {
+    const { api, state } = makeApi();
+    const shell = 'https://example2.com/guides/topic-2';
+    const { engine } = loadEngine({
+      results: [source(1), source(2), source(3)],
+      fetchImpl: htmlAnswer('<html><body>a real article</body></html>'),
+      convertHtml: ({ url }) => url === shell
+        ? { markdown: '', title: '', textLength: 0, bodyTextLength: 46, emptyAppShell: true, tokenCount: 0 }
+        : {
+          markdown: `Body of ${url}`, title: `Title of ${url}`,
+          textLength: 4000, bodyTextLength: 6000, emptyAppShell: false, tokenCount: 30
+        }
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'one spa', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(state.created).toHaveLength(1);
+    expect(state.created[0].url).toBe(shell);
+    expect(snapshot.quiet).toBe(2);
+    expect(snapshot.rendered).toBe(1);
+
+    const escalated = snapshot.entries.find(entry => entry.url === shell);
+    expect(escalated.path).toBe('rendered');
+    expect(escalated.pathReason).toBe('Page is rendered by JavaScript, so a tab was opened');
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Note: Page is rendered by JavaScript, so a tab was opened');
+  });
+
+  it('says how thin a quiet capture was instead of passing it off as complete', async () => {
+    const { api } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1)],
+      fetchImpl: htmlAnswer('<html><body>short but real</body></html>'),
+      convertHtml: ({ url }) => ({
+        markdown: `Body of ${url}`, title: 'Short one',
+        textLength: 640, bodyTextLength: 900, emptyAppShell: false, tokenCount: 8
+      })
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'thin', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const entry = engine.getSnapshot().entries[0];
+    expect(entry.path).toBe('quiet');
+    expect(entry.notes.some(note => note.includes('Only 640 characters'))).toBe(true);
+  });
+
+  it('fails a PDF immediately, without a tab, with the viewer message', async () => {
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1, { url: 'https://arxiv.org/pdf/1706.03762', host: 'arxiv.org' })],
+      fetchImpl: async (requested) => ({
+        status: 200,
+        url: requested,
+        headers: { get: () => 'application/pdf' },
+        text: async () => ''
+      }),
+      convertHtml: () => { throw new Error('a PDF must never reach the parser'); }
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'attention', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const entry = engine.getSnapshot().entries[0];
+    expect(state.created).toHaveLength(0);
+    expect(entry.status).toBe('error');
+    expect(entry.note).toBe("PDFs open in the browser's viewer, where extensions cannot run");
+  });
+
+  it('renders everything and says so once when the popup reports no host access', async () => {
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1), source(2)],
+      fetchImpl: () => { throw new Error('the quiet path must not fetch without host access'); },
+      convertHtml: () => { throw new Error('the quiet path must not parse without host access'); }
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'no access', sourceCount: 5, settings: {}, hostAccess: false });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(state.created).toHaveLength(2);
+    expect(snapshot.quiet).toBe(0);
+    expect(snapshot.captureNote).toBe('Without site access, every source is opened in a background tab');
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Capture note: Without site access');
+  });
+
+  it('renders everything when the user asked for it, whatever the host access', async () => {
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1)],
+      fetchImpl: () => { throw new Error('always-render must not fetch'); },
+      convertHtml: () => { throw new Error('always-render must not parse'); }
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'render it all',
+      sourceCount: 5,
+      settings: { researchCapture: 'render' },
+      hostAccess: true
+    });
+    await waitForRun(engine);
+
+    expect(state.created).toHaveLength(1);
+    expect(engine.getSnapshot().captureNote)
+      .toBe('Every source was opened in a background tab because "Always render" is on');
+  });
+});
+
+describe('research capture setting', () => {
+  it('defaults researchCapture to quiet in the shared defaults', async () => {
+    jest.resetModules();
+    require(SETTINGS_PATH);
+    const captured = {};
+    const browserAPI = {
+      storage: { sync: { get: async (defaults) => Object.assign(captured, defaults) } }
+    };
+
+    const settings = await global.SettingsUtils.getUserSettings(browserAPI);
+
+    expect(captured.researchCapture).toBe('quiet');
+    expect(settings.researchCapture).toBe('quiet');
+  });
+});

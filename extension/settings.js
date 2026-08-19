@@ -42,7 +42,13 @@ const SettingsUtils = (function() {
       xIncludeReplies: true,
       // Research: how many sources one run tries to capture. The picker offers
       // 5 / 8 / 12; research.js re-clamps to 5..12 whatever arrives.
-      researchSourceCount: 8
+      researchSourceCount: 8,
+      // Research capture strategy. 'quiet' fetches each source's HTML in the
+      // background and converts it with no tab at all, escalating to a tab only
+      // for the pages that genuinely need a rendering engine. 'render' opens a
+      // background tab for every source, which is slower and visible but uses
+      // the page's own session and runs its JavaScript.
+      researchCapture: 'quiet'
     });
   }
 

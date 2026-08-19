@@ -16,6 +16,7 @@ const browserAPI = (function () {
     api.runtime = browser.runtime;
     api.storage = browser.storage;
     api.commands = browser.commands;
+    api.permissions = browser.permissions;
   } else if (isChrome) {
     // Chrome APIs
     api.tabs = {
@@ -44,6 +45,20 @@ const browserAPI = (function () {
     };
 
     api.runtime = chrome.runtime;
+
+    // Optional host access for the quiet research path. The request has to sit
+    // inside a user gesture, which is why it lives in the popup and not in the
+    // background.
+    api.permissions = chrome.permissions && {
+      contains: (p) => new Promise((resolve) => chrome.permissions.contains(p, (r) => {
+        void chrome.runtime.lastError;
+        resolve(r === true);
+      })),
+      request: (p) => new Promise((resolve) => chrome.permissions.request(p, (r) => {
+        void chrome.runtime.lastError;
+        resolve(r === true);
+      }))
+    };
 
     api.storage = {
       sync: {
@@ -485,6 +500,7 @@ async function loadSettings() {
     xIncludeRepliesCheckbox.checked = data.xIncludeReplies !== false;
     xMaxPostsSelect.value = String(data.xMaxPosts);
     setResearchSourceCount(data.researchSourceCount, { persist: false });
+    setResearchCapture(data.researchCapture, { persist: false });
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
 
     // Show/hide metadata format container based on checkbox state
@@ -519,6 +535,7 @@ async function saveSettings() {
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
     const researchSourceCount = researchSourceCountValue;
+    const researchCapture = researchCaptureValue;
     const showTokenCount = showTokenCountCheckbox.checked;
     const tokenContextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
 
@@ -540,6 +557,7 @@ async function saveSettings() {
       xIncludeReplies,
       xMaxPosts,
       researchSourceCount,
+      researchCapture,
       showTokenCount,
       tokenContextLimit,
     });
@@ -682,6 +700,7 @@ function getCurrentSettings() {
     xIncludeReplies: xIncludeRepliesCheckbox.checked,
     xMaxPosts: xMaxPostsSelect.value,
     researchSourceCount: researchSourceCountValue,
+    researchCapture: researchCaptureValue,
   };
 }
 
@@ -1246,10 +1265,18 @@ const researchAlert = document.getElementById("researchAlert");
 const centerSection = document.querySelector(".center-section");
 
 const RESEARCH_PORT_NAME = "scrapllm-research";
+const researchCaptureSegments = document.getElementById("researchCaptureSegments");
 const RESEARCH_SOURCE_COUNTS = [5, 8, 12];
+const RESEARCH_CAPTURE_MODES = ["quiet", "render"];
+// The quiet path fetches each source from the background, which needs access to
+// whatever hosts the search turns up. They are unknown until discovery has run,
+// and a permission request must sit inside a user gesture — so the broad
+// pattern is asked for once, on the button press, and declined means "render".
+const RESEARCH_ORIGINS = { origins: ["*://*/*"] };
 const SUMMARY_INTERVAL_MS = 1000;
 
 let researchSourceCountValue = 8;
+let researchCaptureValue = "quiet";
 let researchPort = null;
 let researchSnapshot = null;
 let researchDeliveredRunId = null;
@@ -1447,6 +1474,36 @@ function setResearchSourceCount(value, options) {
     btn.tabIndex = selected ? 0 : -1;
   });
   if (!options || options.persist !== false) saveSettings();
+}
+
+function setResearchCapture(value, options) {
+  const mode = RESEARCH_CAPTURE_MODES.includes(String(value)) ? String(value) : "quiet";
+  researchCaptureValue = mode;
+  researchCaptureSegments.querySelectorAll(".segment-btn").forEach((btn) => {
+    const selected = btn.dataset.value === mode;
+    btn.classList.toggle("is-selected", selected);
+    btn.setAttribute("aria-checked", selected ? "true" : "false");
+    btn.tabIndex = selected ? 0 : -1;
+  });
+  if (!options || options.persist !== false) saveSettings();
+}
+
+function initCaptureControl() {
+  const buttons = Array.from(researchCaptureSegments.querySelectorAll(".segment-btn"));
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => setResearchCapture(btn.dataset.value));
+  });
+
+  researchCaptureSegments.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const index = buttons.findIndex((btn) => btn.dataset.value === researchCaptureValue);
+    const step = event.key === "ArrowRight" ? 1 : -1;
+    const next = buttons[(index + step + buttons.length) % buttons.length];
+    setResearchCapture(next.dataset.value);
+    next.focus();
+  });
 }
 
 function initSegmentedControl() {
@@ -1696,8 +1753,13 @@ function renderSourceRows(snapshot) {
     row.querySelector(".source-host").textContent = entry.host;
     const note = row.querySelector(".source-note");
     note.textContent = entry.note;
-    note.title = entry.note;
-    row.setAttribute("aria-label", `${entry.host}, ${entry.note}`);
+    // How it was captured, and why it was not captured quietly, are on the row
+    // itself rather than only in the finished document.
+    row.dataset.path = entry.path || "";
+    note.title = entry.pathReason ? `${entry.note} — ${entry.pathReason}` : entry.note;
+    row.setAttribute("aria-label", entry.pathReason
+      ? `${entry.host}, ${entry.note}, ${entry.pathReason}`
+      : `${entry.host}, ${entry.note}`);
   });
 }
 
@@ -1706,17 +1768,21 @@ function renderResult(snapshot) {
 
   researchFile.textContent = snapshot.filename || "—";
   researchTokens.textContent = `~${snapshot.tokenCount.toLocaleString()}`;
+  const capture = snapshot.rendered
+    ? ` (${snapshot.quiet} without a tab, ${snapshot.rendered} rendered in one)`
+    : "";
   researchSourcesMeta.textContent = cancelled
     ? `${snapshot.succeeded} of ${snapshot.total} sources were fetched before you stopped.`
-    : `${snapshot.succeeded} of ${snapshot.total} sources`;
+    : `${snapshot.succeeded} of ${snapshot.total} sources${capture}`;
 
-  researchResultNote.classList.toggle("hidden", !snapshot.resultsTooLargeToPersist && !snapshot.degraded);
+  const notes = [];
   if (snapshot.resultsTooLargeToPersist) {
-    researchResultNote.textContent =
-      "The document was too large to keep in session storage — copy or save it before closing the popup.";
-  } else if (snapshot.degraded) {
-    researchResultNote.textContent = snapshot.degraded;
+    notes.push("The document was too large to keep in session storage — copy or save it before closing the popup.");
   }
+  if (snapshot.captureNote) notes.push(snapshot.captureNote);
+  if (snapshot.degraded) notes.push(snapshot.degraded);
+  researchResultNote.classList.toggle("hidden", notes.length === 0);
+  researchResultNote.textContent = notes.join(" ");
 
   researchCopyBtn.textContent = cancelled ? `Keep these ${snapshot.succeeded}` : "Copy Markdown";
   researchAgainBtn.textContent = cancelled ? "Discard" : "New search";
@@ -1841,9 +1907,27 @@ function moveResearchFocus(snapshot, previous) {
 
 // Actions -------------------------------------------------------------------
 
-function startResearch() {
+// The permission request has to be the first thing the gesture does: both
+// browsers only honour permissions.request from inside a user-action handler,
+// and any await before it spends the gesture. Denial is not a failure — the
+// run falls back to a background tab per source, which needs no host access.
+function requestResearchHostAccess() {
+  if (researchCaptureValue === "render") return Promise.resolve(false);
+  if (!browserAPI.permissions || typeof browserAPI.permissions.request !== "function") {
+    return Promise.resolve(false);
+  }
+  try {
+    return browserAPI.permissions.request(RESEARCH_ORIGINS).catch(() => false);
+  } catch (error) {
+    return Promise.resolve(false);
+  }
+}
+
+async function startResearch() {
   const query = researchInput.value.trim();
   if (!query) return;
+
+  const hostAccess = await requestResearchHostAccess();
 
   researchLocalError = null;
   researchDeliveredRunId = null;
@@ -1868,6 +1952,7 @@ function startResearch() {
     type: "start",
     query,
     sourceCount: researchSourceCountValue,
+    hostAccess,
     settings: getCurrentSettings()
   });
 }
@@ -1902,6 +1987,7 @@ function resetResearch() {
 function initResearch() {
   researchPort = connectResearchPort();
   initSegmentedControl();
+  initCaptureControl();
   initSheetGesture();
   renderSheet(0);
   blockSprings.plan.set(1);

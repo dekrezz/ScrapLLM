@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>ScrapLLM offscreen parser</title>
+  </head>
+  <body>
+    <!--
+      Chrome MV3 only. A service worker has no DOMParser and no
+      document.implementation, and both Readability and Turndown need a real
+      DOM, so fetched HTML is parsed here instead of in a tab. Nothing is ever
+      rendered or displayed: this document only parses strings.
+    -->
+    <script src="libs/readability.js"></script>
+    <script src="libs/turndown.js"></script>
+    <script src="convert-core.js"></script>
+    <script src="offscreen.js"></script>
+  </body>
+</html>

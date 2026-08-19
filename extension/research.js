@@ -1,12 +1,27 @@
 // ScrapLLM Research Engine
-// Owns a research run end to end: drives ScrapLLMSearch for discovery, opens
-// one background tab per accepted source, waits for the existing content script
-// to become scriptable, asks it for Markdown through the ordinary
-// `convertToMarkdown` action, merges everything into one document, and reports
+// Owns a research run end to end: drives ScrapLLMSearch for discovery, captures
+// every accepted source, merges everything into one document, and reports
 // progress over the `scrapllm-research` port.
 //
-// Background context only. Depends on ScrapLLMSearch and MultiTabUtils, both
-// resolved at init() time rather than at evaluation time.
+// A source is captured on one of two paths:
+//
+//   quiet    — the HTML is fetched from the background and converted with the
+//              same Readability + Turndown code the content script runs. No tab
+//              exists at any point. This is the default because it is also the
+//              better capture on most pages: post-hydration UI chrome is not
+//              there to pollute the article.
+//   rendered — the source is opened in a muted background tab and the content
+//              script is asked for Markdown, exactly as before. This is what a
+//              page gets when the fetched HTML cannot answer for it: a bot
+//              check, a redirect to a consent wall, an empty app shell, or an
+//              extraction too thin to be the real page.
+//
+// The escalation is per source: one page needing a tab does not put the others
+// in one, and every escalation carries the reason it happened into the popup
+// row and into the document.
+//
+// Background context only. Depends on ScrapLLMSearch, ScrapLLMQuietCapture and
+// MultiTabUtils, all resolved at init() time rather than at evaluation time.
 
 const ScrapLLMResearch = (function() {
   const RESEARCH_CONCURRENCY = 3;
@@ -15,6 +30,7 @@ const ScrapLLMResearch = (function() {
   const SETTLE_DELAY_MS = 400;
   const CONVERT_TIMEOUT_MS = 30000;
   const SEARCH_TIMEOUT_MS = 10000;
+  const PARSE_TIMEOUT_MS = 5000;
   const TOTAL_BUDGET_MS = 240000;
   const PROGRESS_THROTTLE_MS = 250;
   const RESULT_RETENTION_MS = 600000;
@@ -25,10 +41,25 @@ const ScrapLLMResearch = (function() {
   const MIN_SOURCES = 5;
   const MAX_SOURCES = 12;
 
+  const OFFSCREEN_URL = 'offscreen.html';
+  const OFFSCREEN_TARGET = 'scrapllm-offscreen';
+  const OFFSCREEN_REASON = 'DOM_PARSER';
+  const OFFSCREEN_JUSTIFICATION =
+    'Parse fetched research pages into Markdown without opening a tab';
+
+  // Above the 500-character floor that decides "this is not the page at all",
+  // but still short enough that the reader deserves to be told the fetched HTML
+  // may not be the whole story.
+  const QUIET_THIN_CHARS = 1500;
+
   const LAZY_LOAD_NOTE =
     'Scroll pass skipped: background tabs are not rendered, so lazy-loaded sections cannot be triggered';
   const X_NOTE =
     'X timelines are virtualised; a background tab captures only the server-rendered portion';
+  const QUIET_NOTE =
+    'Captured from the server-rendered HTML; no tab was opened';
+  const NO_HOST_ACCESS_NOTE =
+    'Without site access, every source is opened in a background tab';
   const CANCELLED_MESSAGE = 'Cancelled by user';
   const BUDGET_MESSAGE = 'Skipped: the run exceeded the 4-minute budget';
 
@@ -74,6 +105,7 @@ const ScrapLLMResearch = (function() {
       query: '',
       engine: null,
       degraded: null,
+      captureNote: null,
       total: 0,
       completed: 0,
       succeeded: 0,
@@ -83,6 +115,8 @@ const ScrapLLMResearch = (function() {
       deadline: 0,
       tokenCount: 0,
       filename: null,
+      quiet: 0,
+      rendered: 0,
       resultsTooLargeToPersist: false,
       error: null,
       entries: [],
@@ -108,6 +142,7 @@ const ScrapLLMResearch = (function() {
       query: state.query,
       engine: state.engine,
       degraded: state.degraded,
+      captureNote: state.captureNote || null,
       total: entries.length,
       completed: succeeded + failed + skipped,
       succeeded,
@@ -117,6 +152,8 @@ const ScrapLLMResearch = (function() {
       deadline: state.deadline,
       tokenCount: entries.reduce((sum, e) => sum + (e.tokenCount || 0), 0),
       filename: state.filename,
+      quiet: entries.filter(e => e.path === 'quiet').length,
+      rendered: entries.filter(e => e.path === 'rendered').length,
       resultsTooLargeToPersist: state.resultsTooLargeToPersist,
       error: state.error,
       entries: entries.map(e => ({
@@ -126,7 +163,11 @@ const ScrapLLMResearch = (function() {
         status: e.status,
         note: e.note,
         tokenCount: e.tokenCount || 0,
-        notes: e.notes || []
+        notes: e.notes || [],
+        // How this source was captured, and why it was not captured quietly.
+        // The popup shows both; nothing about the path is inferred there.
+        path: e.path || null,
+        pathReason: e.pathReason || null
       })),
       rejected: state.rejected
     };
@@ -234,7 +275,9 @@ const ScrapLLMResearch = (function() {
         status: e.status,
         note: e.note,
         tokenCount: e.tokenCount || 0,
-        notes: e.notes || []
+        notes: e.notes || [],
+        path: e.path || null,
+        pathReason: e.pathReason || null
       })),
       expiresAt: state.expiresAt,
       resultsTooLargeToPersist: state.resultsTooLargeToPersist
@@ -245,6 +288,120 @@ const ScrapLLMResearch = (function() {
       payload.document = previous.document;
     }
     await writePersisted(payload);
+  }
+
+  // --------------------------------------------------------------------------
+  // The parsing host
+  // --------------------------------------------------------------------------
+  //
+  // Firefox MV2 runs the background in a real hidden page, so DOMParser,
+  // Readability and Turndown are all right here. A Chrome MV3 service worker
+  // has none of them, so the same conversion runs in an offscreen document —
+  // one for the whole run, created on the first quiet capture and closed when
+  // the run ends. The branch is on capability, never on a browser name.
+
+  let offscreenPromise = null;
+
+  function canParseLocally() {
+    return typeof DOMParser !== 'undefined' && typeof ScrapLLMConvert !== 'undefined';
+  }
+
+  function hasOffscreenApi() {
+    return !!(api && api.offscreen && typeof api.offscreen.createDocument === 'function');
+  }
+
+  async function offscreenExists() {
+    if (!api.runtime || typeof api.runtime.getContexts !== 'function') return false;
+    try {
+      const contexts = await api.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      return Array.isArray(contexts) && contexts.length > 0;
+    } catch (error) {
+      // getContexts is Chrome 116+. Older Chrome falls through to createDocument
+      // and recovers from its "only a single offscreen document" rejection.
+      return false;
+    }
+  }
+
+  // Single-flight: three concurrent sources hit this at once, and an extension
+  // may only ever have one offscreen document open.
+  function ensureOffscreen() {
+    if (!offscreenPromise) {
+      offscreenPromise = (async () => {
+        if (await offscreenExists()) return;
+        try {
+          await api.offscreen.createDocument({
+            url: OFFSCREEN_URL,
+            reasons: [OFFSCREEN_REASON],
+            justification: OFFSCREEN_JUSTIFICATION
+          });
+        } catch (error) {
+          const message = (error && error.message) || String(error);
+          // Another caller won the race, or a previous run left one behind.
+          if (!/single offscreen document|already exists/i.test(message)) {
+            offscreenPromise = null;
+            throw new Error('Could not open the offscreen parser: ' + message);
+          }
+        }
+      })();
+    }
+    return offscreenPromise;
+  }
+
+  async function closeOffscreen() {
+    offscreenPromise = null;
+    if (!hasOffscreenApi() || typeof api.offscreen.closeDocument !== 'function') return;
+    try {
+      await api.offscreen.closeDocument();
+    } catch (error) {
+      const message = (error && error.message) || String(error);
+      if (!/no.*offscreen document/i.test(message)) {
+        console.warn('Could not close the offscreen parser:', message);
+      }
+    }
+  }
+
+  // Resolves with { success, result } or { success: false, error }. Never
+  // rejects: a parse failure is an escalation signal, not a run failure.
+  async function convertFetchedHtml(payload) {
+    let timeoutId = null;
+    const timeout = new Promise(resolve => {
+      timeoutId = setTimeout(
+        () => resolve({ success: false, error: 'the parser did not answer within 5 s' }),
+        PARSE_TIMEOUT_MS
+      );
+    });
+
+    const work = (async () => {
+      try {
+        if (canParseLocally()) {
+          return { success: true, result: ScrapLLMConvert.convertHtml(payload) };
+        }
+        if (!hasOffscreenApi()) {
+          return {
+            success: false,
+            error: 'this browser exposes neither DOMParser nor an offscreen document'
+          };
+        }
+        await ensureOffscreen();
+        const response = await api.runtime.sendMessage({
+          target: OFFSCREEN_TARGET,
+          action: 'convertHtml',
+          html: payload.html,
+          url: payload.url,
+          title: payload.title,
+          settings: payload.settings
+        });
+        if (!response) return { success: false, error: 'the parser did not answer' };
+        if (!response.success) return { success: false, error: response.error || 'the parser failed' };
+        return { success: true, result: response.result };
+      } catch (error) {
+        return { success: false, error: (error && error.message) || String(error) };
+      }
+    })();
+
+    const outcome = await Promise.race([work, timeout]);
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    return outcome;
   }
 
   // --------------------------------------------------------------------------
@@ -338,34 +495,117 @@ const ScrapLLMResearch = (function() {
     entry.note = note;
   }
 
-  async function fetchOne(source, index, run) {
-    const entry = run.entries[index];
+  function skipResult(source, message) {
+    return {
+      success: false,
+      tab: { id: null, url: source.url, title: source.url },
+      error: message,
+      notes: []
+    };
+  }
 
-    if (run.cancelled) {
-      markEntry(entry, 'skipped', CANCELLED_MESSAGE);
-      broadcast(false);
-      return {
-        success: false,
-        tab: { id: null, url: source.url, title: source.url },
-        error: CANCELLED_MESSAGE,
-        notes: []
-      };
+  // --------------------------------------------------------------------------
+  // The quiet path
+  // --------------------------------------------------------------------------
+
+  // Resolves with:
+  //   { outcome: 'captured', result }  the source is done, no tab was involved
+  //   { outcome: 'rejected', message } no tab could help either — fail loudly
+  //   { outcome: 'render', reason }    hand this source to the tab path
+  async function captureQuietly(source, entry, run) {
+    const preflight = ScrapLLMQuietCapture.preflight(source.url, run.remoteSettings);
+    if (preflight) return { outcome: 'render', reason: preflight.reason };
+
+    const response = await ScrapLLMQuietCapture.fetchSource(source.url, {
+      signal: run.controller.signal
+    });
+    if (run.cancelled) return { outcome: 'rejected', message: CANCELLED_MESSAGE };
+
+    const verdict = ScrapLLMQuietCapture.classifyResponse(response, source.url);
+    if (verdict.decision === 'render') return { outcome: 'render', reason: verdict.reason };
+    if (verdict.decision === 'reject') return { outcome: 'rejected', message: verdict.reason };
+
+    const finalUrl = response.finalUrl || source.url;
+    let markdown;
+    let title = source.title;
+    let tokenCount = 0;
+    let textLength = 0;
+
+    if (response.kind === 'text') {
+      // text/plain and text/markdown are already the document. Readability has
+      // nothing to add and would only throw the body away.
+      markdown = response.text;
+      textLength = response.text.trim().length;
+      tokenCount = markdown.length ? Math.ceil(markdown.length / 4) : 0;
+      if (textLength < ScrapLLMQuietCapture.MIN_TEXT_CHARS) {
+        return {
+          outcome: 'render',
+          reason: `Server-rendered text was only ${textLength} characters, so a tab was opened`
+        };
+      }
+    } else {
+      const converted = await convertFetchedHtml({
+        html: response.html,
+        url: finalUrl,
+        title: source.title,
+        settings: run.remoteSettings
+      });
+      const extraction = converted.success
+        ? converted.result
+        : { failed: true, error: converted.error };
+
+      const check = ScrapLLMQuietCapture.classifyExtraction(extraction);
+      if (check.decision === 'render') return { outcome: 'render', reason: check.reason };
+
+      markdown = extraction.markdown;
+      title = extraction.title || source.title;
+      tokenCount = extraction.tokenCount || 0;
+      textLength = extraction.textLength || 0;
     }
 
-    if (Date.now() > run.deadline) {
-      markEntry(entry, 'skipped', BUDGET_MESSAGE);
-      broadcast(false);
-      return {
-        success: false,
-        tab: { id: null, url: source.url, title: source.url },
-        error: BUDGET_MESSAGE,
-        notes: []
-      };
+    const notes = [QUIET_NOTE];
+    // Requirement of rule 3: a thin capture is never passed off as a whole
+    // page. It is above the floor, so it is kept — and it says how thin it is.
+    if (textLength < QUIET_THIN_CHARS) {
+      notes.push(
+        `Only ${textLength} characters of article text were in the server-rendered HTML, ` +
+        'so this page may carry more content behind JavaScript'
+      );
     }
 
-    markEntry(entry, 'fetching', 'Fetching');
+    entry.title = title;
+    entry.tokenCount = tokenCount;
+    entry.notes = notes;
+    entry.path = 'quiet';
+    entry.pathReason = null;
+    markEntry(entry, 'ok', `${formatTokenNote(tokenCount)} · quiet`);
     broadcast(false);
 
+    return {
+      outcome: 'captured',
+      result: {
+        success: true,
+        tab: { id: null, url: finalUrl, title },
+        fetchedAt: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        markdown,
+        tokenCount,
+        notes,
+        path: 'quiet',
+        pathReason: null,
+        source: {
+          host: source.host,
+          snippet: source.snippet,
+          engineRank: source.engineRank
+        }
+      }
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // The rendered path (unchanged: one muted background tab, per source)
+  // --------------------------------------------------------------------------
+
+  async function captureInTab(source, entry, run, escalationReason) {
     let tab = null;
     try {
       tab = await createTab(source.url, run.windowId);
@@ -411,10 +651,12 @@ const ScrapLLMResearch = (function() {
       }
 
       const notes = notesForSource(source);
+      if (escalationReason) notes.unshift(escalationReason);
+
       entry.title = finalTitle;
       entry.tokenCount = conversion.tokenCount || 0;
       entry.notes = notes;
-      markEntry(entry, 'ok', formatTokenNote(conversion.tokenCount || 0));
+      markEntry(entry, 'ok', `${formatTokenNote(conversion.tokenCount || 0)} · tab`);
       broadcast(false);
 
       return {
@@ -424,6 +666,8 @@ const ScrapLLMResearch = (function() {
         markdown: conversion.markdown,
         tokenCount: conversion.tokenCount || 0,
         notes,
+        path: 'rendered',
+        pathReason: escalationReason || null,
         source: {
           host: source.host,
           snippet: source.snippet,
@@ -433,7 +677,11 @@ const ScrapLLMResearch = (function() {
     } catch (error) {
       const message = (error && error.message) || String(error);
       const cancelled = run.cancelled || message === CANCELLED_MESSAGE;
-      const reason = cancelled ? CANCELLED_MESSAGE : message;
+      // Both halves of the story: why the quiet path gave up, and why the tab
+      // it escalated to failed as well.
+      const reason = cancelled
+        ? CANCELLED_MESSAGE
+        : (escalationReason ? `${escalationReason}, and then: ${message}` : message);
 
       markEntry(entry, cancelled ? 'skipped' : 'error', reason);
       broadcast(false);
@@ -442,6 +690,8 @@ const ScrapLLMResearch = (function() {
         success: false,
         tab: { id: tab ? tab.id : null, url: source.url, title: source.title || source.url },
         error: reason,
+        path: 'rendered',
+        pathReason: escalationReason || null,
         notes: []
       };
     } finally {
@@ -451,6 +701,72 @@ const ScrapLLMResearch = (function() {
         await persistState();
       }
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Per-source pipeline
+  // --------------------------------------------------------------------------
+
+  async function fetchOne(source, index, run) {
+    const entry = run.entries[index];
+
+    if (run.cancelled) {
+      markEntry(entry, 'skipped', CANCELLED_MESSAGE);
+      broadcast(false);
+      return skipResult(source, CANCELLED_MESSAGE);
+    }
+
+    if (Date.now() > run.deadline) {
+      markEntry(entry, 'skipped', BUDGET_MESSAGE);
+      broadcast(false);
+      return skipResult(source, BUDGET_MESSAGE);
+    }
+
+    markEntry(entry, 'fetching', 'Fetching');
+    broadcast(false);
+
+    let escalationReason = null;
+
+    if (run.strategy === 'quiet') {
+      let quiet;
+      try {
+        quiet = await captureQuietly(source, entry, run);
+      } catch (error) {
+        // The quiet path is not allowed to take a source down with it: an
+        // unexpected failure here is an escalation, with its own reason.
+        quiet = {
+          outcome: 'render',
+          reason: 'The quiet capture failed (' +
+            ((error && error.message) || String(error)) + '), so a tab was opened'
+        };
+      }
+
+      if (quiet.outcome === 'captured') return quiet.result;
+
+      if (quiet.outcome === 'rejected') {
+        const cancelled = run.cancelled || quiet.message === CANCELLED_MESSAGE;
+        markEntry(entry, cancelled ? 'skipped' : 'error', quiet.message);
+        entry.path = 'quiet';
+        entry.pathReason = null;
+        broadcast(false);
+        return {
+          success: false,
+          tab: { id: null, url: source.url, title: source.title || source.url },
+          error: quiet.message,
+          path: 'quiet',
+          pathReason: null,
+          notes: []
+        };
+      }
+
+      escalationReason = quiet.reason;
+      entry.pathReason = escalationReason;
+      markEntry(entry, 'fetching', 'Opening a tab');
+      broadcast(false);
+    }
+
+    entry.path = 'rendered';
+    return await captureInTab(source, entry, run, escalationReason);
   }
 
   // --------------------------------------------------------------------------
@@ -480,14 +796,22 @@ const ScrapLLMResearch = (function() {
 
     const tokenCount = successes.reduce((sum, item) => sum + (item.result.tokenCount || 0), 0);
 
+    const quietCount = successes.filter(item => item.result.path === 'quiet').length;
+    const renderedCount = successes.length - quietCount;
+
     const frontMatter = [
       '---',
       `Research: ${run.query}`,
       `Date: ${MultiTabUtils.getDateString()}`,
       `Engine: ${run.engine || 'duckduckgo-html'}`,
       `Sources: ${successes.length} of ${run.sources.length} fetched`,
+      // How each source arrived is part of what the document is: a quietly
+      // fetched page is the server's HTML, a rendered one is what a browser
+      // made of it.
+      `Capture: ${quietCount} fetched without a tab, ${renderedCount} rendered in a background tab`,
       `Tokens: ~${tokenCount} (o200k_base estimate)`
     ];
+    if (run.captureNote) frontMatter.push(`Capture note: ${run.captureNote}`);
     if (run.degraded) frontMatter.push(`Notes: ${run.degraded}`);
     frontMatter.push('---');
 
@@ -519,7 +843,10 @@ const ScrapLLMResearch = (function() {
       const header = [
         `## ${index + 1}. ${title}`,
         `Source: ${item.result.tab.url}`,
-        `Fetched: ${item.result.fetchedAt}`
+        `Fetched: ${item.result.fetchedAt}`,
+        `Captured: ${item.result.path === 'quiet'
+          ? 'server-rendered HTML, no tab'
+          : 'rendered in a background tab'}`
       ];
       (item.result.notes || []).forEach(note => header.push(`Note: ${note}`));
       return header.join('\n') + '\n\n' + item.result.markdown;
@@ -563,9 +890,27 @@ const ScrapLLMResearch = (function() {
 
     const sourceCount = clampSourceCount(request && request.sourceCount);
     const settings = Object.assign({}, (request && request.settings) || {});
-    // Background tabs are never rendered, so a scroll pass would spend the
-    // budget and change nothing. Forced off, and reported on every source.
+    // Neither path renders anything: a background tab is not painted, and the
+    // quiet path has no tab at all. A scroll pass would spend the budget and
+    // change nothing, so it is forced off and reported on every source.
     settings.triggerLazyLoading = false;
+
+    // Quiet by default. Two things can send a whole run down the tab path: the
+    // user asking for it, and the browser not granting the site access a
+    // background fetch needs. Both say so once, at run level.
+    // Absent means "no proof of access", not "assume access": only the popup
+    // can ask for the host permission, so only the popup can report it.
+    const hostAccess = !!(request && request.hostAccess === true);
+    const wantsRender = settings.researchCapture === 'render';
+    let strategy = 'quiet';
+    let captureNote = null;
+    if (wantsRender) {
+      strategy = 'render';
+      captureNote = 'Every source was opened in a background tab because "Always render" is on';
+    } else if (!hostAccess) {
+      strategy = 'render';
+      captureNote = NO_HOST_ACCESS_NOTE;
+    }
 
     const now = Date.now();
     const run = {
@@ -574,6 +919,8 @@ const ScrapLLMResearch = (function() {
       query,
       sourceCount,
       remoteSettings: settings,
+      strategy,
+      captureNote,
       engine: null,
       degraded: null,
       error: null,
@@ -601,6 +948,7 @@ const ScrapLLMResearch = (function() {
     execute(run).catch(async error => {
       run.phase = 'error';
       run.error = (error && error.message) || String(error);
+      await closeOffscreen();
       broadcast(true);
       await persistState();
     });
@@ -665,6 +1013,8 @@ const ScrapLLMResearch = (function() {
       (source, index) => fetchOne(source, index, run)
     );
 
+    await closeOffscreen();
+
     const { markdown, tokenCount } = buildDocument(run, results);
     const filename = buildFilename(run.query);
 
@@ -697,6 +1047,10 @@ const ScrapLLMResearch = (function() {
     } catch (e) {
       // An already-aborted controller is fine.
     }
+
+    // An in-flight quiet capture is stopped by the aborted controller above;
+    // the parser it may have been talking to is no longer needed either.
+    closeOffscreen();
 
     // Removing a tab rejects its pending sendMessage, which is what actually
     // stops an in-flight conversion.
@@ -754,6 +1108,10 @@ const ScrapLLMResearch = (function() {
     for (const tabId of tabIds) {
       await removeTab(tabId);
     }
+
+    // A crashed worker can also leave the offscreen parser open, and an
+    // extension may only have one.
+    await closeOffscreen();
 
     lastSnapshot = Object.assign(idleSnapshot(), {
       runId: persisted.runId || null,

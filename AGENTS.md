@@ -101,21 +101,62 @@ One question in, one Markdown file out. Two stages, both in the background:
    fixtures alone. Candidates are filtered (non-pages, login walls, paywalls,
    duplicate hosts and URLs), scored, and cut to the requested count; every
    dropped candidate keeps the reason it was dropped.
-2. **Capture** — `research.js` opens one muted background tab per accepted
-   source, polls `ping` until the declaratively injected content script answers,
-   then sends the ordinary `convertToMarkdown` action. No new content-script
-   action exists, and the research path never calls
-   `ensureContentScriptLoaded`: it has no host permission off the active tab.
+2. **Capture** — `research.js` captures each accepted source on one of two
+   paths, per source:
+
+   * **quiet** (the default) — `quiet-capture.js` fetches the source's HTML
+     from the background and `convert-core.js` converts it with the same
+     Readability + Turndown code the content script runs. No tab is created at
+     any point. This is not a compromise: on most pages the server-rendered
+     HTML is the *better* capture, because post-hydration UI chrome is not
+     there for Readability to keep.
+   * **rendered** — the source is opened in one muted background tab, polled
+     with `ping` until the declaratively injected content script answers, then
+     asked for Markdown through the ordinary `convertToMarkdown` action. No new
+     content-script action exists, and the research path never calls
+     `ensureContentScriptLoaded`.
+
+   A source escalates from quiet to rendered on exactly these signals, in this
+   order, each carrying its own verbatim reason: a network failure or an
+   unusable content type is a **rejection** (a tab cannot help a PDF, and the
+   tab path's own habit of capturing Chrome's TLS interstitial as an article is
+   worse than saying "certificate has expired"); a non-2xx status, a redirect
+   onto a consent/login host, an empty `#root`/`#__next`/`app-root` shell, a
+   parse that failed, or fewer than 500 characters of Readability text is a
+   **render**. Reddit and X escalate before the fetch, because their extractors
+   need the live page. `MIN_TEXT_CHARS` is a guard, not a preference: over 30
+   measured pages the worst junk page yielded 98 characters and the weakest
+   genuine article 1385. Above the floor but under 1500 characters the capture
+   is kept *and* says how thin it was.
+
+   The parsing needs a DOM. Chrome MV3 has none in the worker, so it uses one
+   offscreen document (`offscreen.html`, reason `DOM_PARSER`) for the whole run,
+   created lazily and closed on every exit path including orphan recovery.
+   Firefox's background is a real page and parses in place. The branch is
+   `typeof DOMParser !== 'undefined'`, never a browser name.
+
+   The fetch needs host access, which is requested as an **optional** host
+   permission from the Research button's click handler — both browsers only
+   honour `permissions.request` inside a user gesture, and the result hosts are
+   unknown until discovery has run, so a per-host request afterwards is
+   impossible. Denial is not a failure: the run falls back to a tab per source,
+   which needs no host permission, and says so once at run level.
+
+   `researchCapture` (`'quiet'` / `'render'`) lets the user force the tab path.
 
 Brave Search was rejected as a fallback (rate limited after a handful of
 queries, build-hashed class names) and the Google News RSS recency booster was
 rejected because its links only resolve inside a real tab. Recency is `&df=d` on
 DuckDuckGo instead.
 
-Research tabs always force `triggerLazyLoading: false` — a background tab is
-never rendered, so a scroll pass would spend the budget and change nothing — and
-every captured source says so, in its row in the popup and in a `Note:` line in
-the document. X hosts carry a second note about virtualised timelines.
+Research always forces `triggerLazyLoading: false` — a background tab is never
+rendered and the quiet path has no tab at all, so a scroll pass would spend the
+budget and change nothing. Every rendered source says so, in its row in the
+popup and in a `Note:` line in the document; every quiet source says it was
+captured from the server-rendered HTML instead. X hosts carry a second note
+about virtualised timelines. Each entry carries `path` (`quiet` / `rendered`)
+and `pathReason` into the snapshot, the popup row and the document, and the
+document's front matter counts both.
 
 | Constant | Value |
 |----------|-------|
@@ -123,6 +164,8 @@ the document. X hosts carry a second note about virtualised timelines.
 | `PING_INTERVAL_MS` / `PAGE_LOAD_TIMEOUT_MS` | 250 / 20000 |
 | `SETTLE_DELAY_MS` / `CONVERT_TIMEOUT_MS` | 400 / 30000 |
 | `SEARCH_TIMEOUT_MS` / `TOTAL_BUDGET_MS` | 10000 / 240000 |
+| `FETCH_TIMEOUT_MS` / `PARSE_TIMEOUT_MS` | 10000 / 5000 |
+| `MIN_TEXT_CHARS` / `QUIET_THIN_CHARS` | 500 / 1500 |
 | `PROGRESS_THROTTLE_MS` / `RESULT_RETENTION_MS` | 250 / 600000 |
 | `MAX_PERSIST_BYTES` | 5242880 |
 
@@ -145,8 +188,11 @@ endpoint would fail the same way); a 200 with no parsable blocks and no marker
 is markup drift and says so. A half-filled result set is never returned as a
 success.
 
-New host permissions: `https://html.duckduckgo.com/*` and
-`https://lite.duckduckgo.com/*`. Nothing else — background tabs need none.
+Host permissions: `https://html.duckduckgo.com/*` and
+`https://lite.duckduckgo.com/*` are required (discovery). The quiet path's
+`*://*/*` is **optional** and requested at run time; the tab path needs none, so
+declining costs visibility, never capability. Chrome also declares the
+`offscreen` permission, which the build strips from the Firefox manifest.
 
 The popup talks to the engine over one long-lived port, `scrapllm-research`,
 opened on `DOMContentLoaded`. There is no `runtime.sendMessage` path: the popup
@@ -155,12 +201,22 @@ length of a run.
 
 | Direction | Message |
 |-----------|---------|
-| popup → background | `start {query, sourceCount, settings}`, `cancel {runId}`, `sync {}`, `getDocument {runId}` |
+| popup → background | `start {query, sourceCount, settings, hostAccess}`, `cancel {runId}`, `sync {}`, `getDocument {runId}` |
 | background → popup | `snapshot {snapshot}` (throttled to 250 ms, always flushed on a phase change), plus `accepted`, `document` and `error` replies |
 
 The snapshot is the whole UI state — phase, counts, per-source rows with their
 status and note, and the rejected candidates. Markdown never travels in a
 snapshot; the popup asks for the document once, at the end.
+
+`convert-core.js` owns the document-to-Markdown path and is loaded in three
+contexts: as a content script (before `content.js`), in Chrome's offscreen
+document, and in Firefox's background page. It never reads `window.location` or
+`document.title` — the caller passes the *source's* URL and title, because in
+the background contexts the ambient document is the extension's own page. A
+`<base href>` is injected into fetched HTML before Readability runs, so relative
+links resolve against the source site rather than `chrome-extension://`.
+Selection, chat and the live scroll pass stay in `content.js`: they need a
+rendered page.
 
 `multi-tab-utils.js` owns the two pieces both paths share: `runPool` (index
 cursor, dense results, the handler must resolve rather than reject) and
@@ -229,8 +285,15 @@ places (Chrome, Firefox, source).
 
 A background-only file is not a content script: add it to the `importScripts`
 call at the top of `background.js` (Chrome) and to the `background.scripts`
-array in the build script's Firefox jq program, in load order. `search.js` and
-`research.js` are the examples.
+array in the build script's Firefox jq program, in load order. `search.js`,
+`quiet-capture.js` and `research.js` are the examples.
+
+A file that belongs to only one browser goes in that browser's `cp` block
+alone: `offscreen.html` and `offscreen.js` ship to Chrome and to the source
+package, never to Firefox, which has no offscreen API and needs none. A file
+that both a content script and the background use — `convert-core.js` — goes in
+`content_scripts[0].js`, in Firefox's `background.scripts`, in the offscreen
+page's `<script>` list, and in all three `cp` blocks.
 
 ## Browser differences
 

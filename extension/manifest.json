@@ -22,12 +22,16 @@
     "storage",
     "scripting",
     "contextMenus",
-    "menus"
+    "menus",
+    "offscreen"
   ],
   "host_permissions": [
     "https://tiktoken.pages.dev/*",
     "https://html.duckduckgo.com/*",
     "https://lite.duckduckgo.com/*"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -46,6 +50,7 @@
         "libs/readability.js",
         "libs/turndown.js",
         "motion.js",
+        "convert-core.js",
         "selection.js",
         "chat.js",
         "reddit.js",

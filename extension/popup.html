@@ -193,6 +193,16 @@
                 <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="12">12</button>
               </div>
             </div>
+            <div class="research-plan-row">
+              <span class="research-plan-label">Capture</span>
+              <div id="researchCaptureSegments" class="research-segmented" role="radiogroup"
+                   aria-label="How each source is captured">
+                <button class="segment-btn is-selected" type="button" role="radio" aria-checked="true" tabindex="0" data-value="quiet"
+                        title="Read each page's HTML in the background, without opening a tab">Quiet</button>
+                <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="render"
+                        title="Open every source in a background tab, so its JavaScript runs">Always render</button>
+              </div>
+            </div>
             <div class="research-actions">
               <button id="researchStartBtn" class="primary-btn" type="button">Research &amp; Download</button>
             </div>

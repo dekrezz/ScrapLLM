@@ -81,6 +81,7 @@ build_chrome() {
   cp "$EXT_DIR/background.js" "$CHROME_DIR/"
   cp "$EXT_DIR/content.js" "$CHROME_DIR/"
   cp "$EXT_DIR/motion.js" "$CHROME_DIR/"
+  cp "$EXT_DIR/convert-core.js" "$CHROME_DIR/"
   cp "$EXT_DIR/selection.js" "$CHROME_DIR/"
   cp "$EXT_DIR/chat.js" "$CHROME_DIR/"
   cp "$EXT_DIR/reddit.js" "$CHROME_DIR/"
@@ -91,6 +92,11 @@ build_chrome() {
   cp "$EXT_DIR/settings.js" "$CHROME_DIR/"
   cp "$EXT_DIR/search.js" "$CHROME_DIR/"
   cp "$EXT_DIR/research.js" "$CHROME_DIR/"
+  cp "$EXT_DIR/quiet-capture.js" "$CHROME_DIR/"
+  # Chrome only: a service worker has no DOM, so fetched research pages are
+  # parsed in an offscreen document.
+  cp "$EXT_DIR/offscreen.html" "$CHROME_DIR/"
+  cp "$EXT_DIR/offscreen.js" "$CHROME_DIR/"
   cp "$EXT_DIR/styles.css" "$CHROME_DIR/"
   cp "$EXT_DIR/token-counter.js" "$CHROME_DIR/" 2>/dev/null || echo "Warning: token-counter.js not found"
   
@@ -153,6 +159,7 @@ build_firefox() {
   cp "$EXT_DIR/background.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/content.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/motion.js" "$FIREFOX_DIR/"
+  cp "$EXT_DIR/convert-core.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/selection.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/chat.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/reddit.js" "$FIREFOX_DIR/"
@@ -163,6 +170,7 @@ build_firefox() {
   cp "$EXT_DIR/settings.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/search.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/research.js" "$FIREFOX_DIR/"
+  cp "$EXT_DIR/quiet-capture.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/styles.css" "$FIREFOX_DIR/"
   cp "$EXT_DIR/token-counter.js" "$FIREFOX_DIR/" 2>/dev/null || echo "Warning: token-counter.js not found"
   
@@ -176,6 +184,10 @@ build_firefox() {
   if command -v jq &> /dev/null; then
     echo "Using jq to create Firefox manifest..."
     # For Firefox 109, modify the background section to use scripts instead of service_worker
+    # Firefox's background is a real hidden page, so Readability, Turndown and
+    # convert-core.js load there and fetched research pages are parsed in
+    # place. There is no offscreen API in Firefox, and none is needed, so the
+    # "offscreen" permission is stripped rather than shipped as a warning.
     jq '
     .browser_specific_settings = {
       "gecko": {
@@ -183,9 +195,10 @@ build_firefox() {
         "strict_min_version": "109.0"
       }
     } |
+    .permissions = (.permissions - ["offscreen"]) |
     if has("background") then
       .background = {
-        "scripts": ["libs/jszip.min.js", "multi-tab-utils.js", "settings.js", "search.js", "research.js", "background.js"]
+        "scripts": ["libs/jszip.min.js", "libs/readability.js", "libs/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "research.js", "background.js"]
       }
     else
       .
@@ -195,7 +208,8 @@ build_firefox() {
     echo "jq not found, using manual modification..."
     cp "$EXT_DIR/manifest.json" "$FIREFOX_DIR/manifest.json"
     # This is a basic substitution but might not work for all cases
-    sed -i.bak 's/"service_worker": "background.js",\s*"type": "module"/"scripts": ["libs\/jszip.min.js", "multi-tab-utils.js", "settings.js", "search.js", "research.js", "background.js"]/' "$FIREFOX_DIR/manifest.json" || true
+    sed -i.bak 's/"service_worker": "background.js",\s*"type": "module"/"scripts": ["libs\/jszip.min.js", "libs\/readability.js", "libs\/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "research.js", "background.js"]/' "$FIREFOX_DIR/manifest.json" || true
+    sed -i.bak '/"offscreen"/d' "$FIREFOX_DIR/manifest.json" || true
     rm -f "$FIREFOX_DIR/manifest.json.bak" 2>/dev/null || true
   fi
   
@@ -224,6 +238,7 @@ build_source() {
   cp "$EXT_DIR/background.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/content.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/motion.js" "$SOURCE_DIR/"
+  cp "$EXT_DIR/convert-core.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/selection.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/chat.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/reddit.js" "$SOURCE_DIR/"
@@ -234,6 +249,9 @@ build_source() {
   cp "$EXT_DIR/settings.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/search.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/research.js" "$SOURCE_DIR/"
+  cp "$EXT_DIR/quiet-capture.js" "$SOURCE_DIR/"
+  cp "$EXT_DIR/offscreen.html" "$SOURCE_DIR/"
+  cp "$EXT_DIR/offscreen.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/styles.css" "$SOURCE_DIR/"
   cp "$EXT_DIR/token-counter.js" "$SOURCE_DIR/" 2>/dev/null || echo "Warning: token-counter.js not found"
   cp "$EXT_DIR/manifest.json" "$SOURCE_DIR/"
