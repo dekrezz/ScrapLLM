@@ -634,8 +634,22 @@ ScrapLLMResearch.onProgress((snapshot) => {
   researchPorts.forEach(port => postToPort(port, { type: 'snapshot', snapshot }));
 });
 
+// The port carries the whole merged document, including pages captured from
+// the user's own session. Only this extension's own pages may hold it: a
+// sender with a `tab` is a content script, running in a web page's frame.
+function isExtensionPagePort(port) {
+  const sender = port.sender;
+  if (!sender) return false;
+  if (sender.id !== browserAPI.runtime.id) return false;
+  return sender.tab === undefined;
+}
+
 browserAPI.runtime.onConnect.addListener((port) => {
   if (port.name !== RESEARCH_PORT_NAME) return;
+  if (!isExtensionPagePort(port)) {
+    port.disconnect();
+    return;
+  }
 
   researchPorts.add(port);
   postToPort(port, { type: 'snapshot', snapshot: ScrapLLMResearch.getSnapshot() });
@@ -679,6 +693,12 @@ browserAPI.runtime.onConnect.addListener((port) => {
     }
 
     if (message.type === 'getDocument') {
+      // A run id is required: the document is only ever handed back to a caller
+      // that names the run it is asking about.
+      if (!message.runId) {
+        postToPort(port, { type: 'error', message: RESULTS_GONE_MESSAGE });
+        return;
+      }
       const doc = await ScrapLLMResearch.getDocument(message.runId);
       if (!doc) {
         postToPort(port, { type: 'error', message: RESULTS_GONE_MESSAGE });

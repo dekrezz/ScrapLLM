@@ -337,14 +337,17 @@ const ScrapLLMSearch = (function() {
         rejected.push({ url: url.href, host, reason: 'Paywall notice in snippet' });
         continue;
       }
-      if (keptHosts.has(host)) {
-        rejected.push({ url: url.href, host, reason: 'Duplicate host' });
-        continue;
-      }
-
+      // The URL key is tested first, and it has to be: two spellings of the
+      // same page share a host, so testing the host first reported every
+      // repeat of one link as a different page on the same site.
       const key = normalizedKey(url);
       if (keptKeys.has(key)) {
         rejected.push({ url: url.href, host, reason: 'Duplicate URL' });
+        continue;
+      }
+
+      if (keptHosts.has(host)) {
+        rejected.push({ url: url.href, host, reason: 'Duplicate host' });
         continue;
       }
 
@@ -481,7 +484,11 @@ const ScrapLLMSearch = (function() {
     const { results, rejected } = filterAndRank(attempt.parsed.results, limit, normalizedQuery);
 
     if (attempt.parsed.results.length > 0 && results.length < COMFORTABLE_SOURCE_COUNT) {
-      degraded = `only ${results.length} usable sources after filtering`;
+      // Appended, never assigned: a thin result set does not stop being the
+      // lite endpoint's result set, and overwriting hid the endpoint failure
+      // from the sheet and from the document's Notes line.
+      const thin = `only ${results.length} usable sources after filtering`;
+      degraded = degraded ? `${degraded}; ${thin}` : thin;
     }
 
     results.forEach(entry => seenHosts.add(entry.host));

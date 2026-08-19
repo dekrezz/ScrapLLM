@@ -262,7 +262,7 @@ what has to be closed in that case.
 | `RESEARCH_CONCURRENCY` | 3 (the multi-tab path keeps 4) |
 | `PING_INTERVAL_MS` / `PAGE_LOAD_TIMEOUT_MS` | 250 / 20000 |
 | `SETTLE_DELAY_MS` / `CONVERT_TIMEOUT_MS` | 400 / 30000 |
-| `SEARCH_TIMEOUT_MS` / `TOTAL_BUDGET_MS` | 10000 / 240000 |
+| `REQUEST_TIMEOUT_MS` (search.js) / `TOTAL_BUDGET_MS` | 10000 / 240000 |
 | `FETCH_TIMEOUT_MS` / `PARSE_TIMEOUT_MS` | 10000 / 5000 |
 | `MIN_TEXT_CHARS` / `QUIET_THIN_CHARS` | 500 / 1500 |
 | `MAX_BYTES` (one fetched body) | 5242880 |
@@ -280,6 +280,13 @@ never finishes; three concurrent tabs is what keeps a run from behaving like a
 crawler on the user's own machine and network. Each limit produces its own
 verbatim message, and every one of them lands in the popup row *and* in the
 document's `### Not fetched` block.
+
+Discovery is bounded per request, never per run: `search.js` gives each endpoint
+attempt its own 10 s `AbortController`. There is deliberately no timer on
+`run.controller` — that signal belongs to the whole run and the quiet captures
+share it, so a run-level search timeout did not stop discovery, it aborted every
+capture in flight and put the browser's own "The user aborted a request." in the
+sheet. `run.controller` is aborted by `cancel()` and by nothing else.
 
 Discovery failures are classified rather than flattened, in this order: a
 zero-result marker is an empty answer, not an error; an anomaly banner is
@@ -331,6 +338,24 @@ document builder. Write them, never run them.
 Run state lives in `storage.session` when the browser has it (Chrome, Firefox
 115+) and in a module variable otherwise; either way `recoverOrphans()` runs at
 module evaluation and closes tabs a crashed or restarted worker left behind.
+
+Persistence is serialised: `persistState` queues behind the write before it and
+builds its payload *after* the read it needs, because the record carries
+`openTabIds` and two workers opening a tab each would otherwise interleave and
+land the older set last — leaving a tab that orphan recovery can never find. A
+document is carried forward from the previous record only when its `runId` is
+the run being persisted, and an explicit `document: null` is distinguished from
+an absent key, so dropping an over-sized document cannot write the *previous*
+run's document back under the current run's id. The size guard measures UTF-8
+bytes (`TextEncoder`), not characters, and a store that refuses the write says
+so: `persistState` resolves false and the run is marked as not retained rather
+than reported as a clean result over nothing.
+
+The `scrapllm-research` port is accepted only from this extension's own pages
+(`port.sender.id === runtime.id` and no `sender.tab`), and `getDocument`
+requires the run id it belongs to — the merged document holds pages captured
+with the user's session, so it is never handed to a caller that cannot name the
+run.
 
 ### Motion and interface
 

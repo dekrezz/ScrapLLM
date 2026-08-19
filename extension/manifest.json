@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ScrapLLM - Web to Markdown for AI",
   "version": "2.2.1",
-  "description": "Convert any webpage to clean Markdown for ChatGPT, Claude & Gemini. Multi-tab copy, token counter. 100% private.",
+  "description": "Webpage to clean Markdown for ChatGPT, Claude & Gemini. Page content stays in your browser; Research asks DuckDuckGo.",
   "author": "dekrezz",
   "icons": {
     "16": "icons/icon16.png",

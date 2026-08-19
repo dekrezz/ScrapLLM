@@ -205,6 +205,19 @@ describe('ScrapLLMSearch.findSources classification', () => {
     expect(result.results).toHaveLength(5);
   });
 
+  it('keeps the endpoint note when the filtered set is thin as well', async () => {
+    mockFetchSequence([
+      { status: 503, body: '' },
+      { body: ddgLiteFixture(3) }
+    ]);
+
+    const result = await Search.findSources('spring animations', { limit: 8 });
+
+    expect(result.degraded).toBe(
+      'html endpoint unavailable, used the lite endpoint; only 3 usable sources after filtering'
+    );
+  });
+
   it('throws the rate-limit message on an anomaly page and does not try the lite endpoint', async () => {
     const calls = mockFetchSequence([{ body: ANOMALY_HTML }]);
 
@@ -312,6 +325,17 @@ describe('ScrapLLMSearch.filterAndRank', () => {
     ]);
     expect(rejected).toHaveLength(1);
     expect(rejected[0].reason).toBe('Duplicate host');
+  });
+
+  it('calls two spellings of one link a duplicate URL, not a duplicate host', () => {
+    const { results, rejected } = Search.filterAndRank([
+      candidate('https://example.com/a/b', { engineRank: 1 }),
+      candidate('https://www.example.com/a/b/?utm_source=ddg', { engineRank: 2 })
+    ], 8);
+
+    expect(results).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toBe('Duplicate URL');
   });
 
   it('ranks a trusted host above a better-placed ordinary result', () => {
@@ -731,6 +755,43 @@ describe('ScrapLLMResearch run engine', () => {
     engine.init(api);
 
     await expect(engine.getDocument('research-missing')).resolves.toBeNull();
+  });
+
+  it('never hands the document back without the run id it belongs to', async () => {
+    const { api } = makeApi();
+    const { engine } = loadEngine({
+      searchResult: { results: [source(1)], engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null },
+      convert: async () => okConversion('# One', 10)
+    });
+
+    engine.init(api);
+    const runId = await engine.start({ query: 'spring animations', sourceCount: 5, settings: {} });
+    await waitForRun(engine);
+
+    await expect(engine.getDocument()).resolves.toBeNull();
+    await expect(engine.getDocument(runId)).resolves.not.toBeNull();
+  });
+
+  it('does not carry a finished run document into the next run', async () => {
+    const store = sessionStore();
+    const { api } = makeApi({ storage: { session: store } });
+    const { engine } = loadEngine({
+      searchResult: { results: [source(1)], engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null },
+      convert: async () => okConversion('# One', 10)
+    });
+
+    engine.init(api);
+    const firstId = await engine.start({ query: 'first question', sourceCount: 5, settings: {} });
+    await waitForRun(engine);
+    expect(store.data['scrapllm.researchRun'].document.runId).toBe(firstId);
+
+    const secondId = await engine.start({ query: 'second question', sourceCount: 5, settings: {} });
+    await waitForRun(engine);
+
+    const persisted = store.data['scrapllm.researchRun'];
+    expect(persisted.runId).toBe(secondId);
+    expect(persisted.document.runId).toBe(secondId);
+    await expect(engine.getDocument(firstId)).resolves.toBeNull();
   });
 });
 

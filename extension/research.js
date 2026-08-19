@@ -29,7 +29,6 @@ const ScrapLLMResearch = (function() {
   const PAGE_LOAD_TIMEOUT_MS = 20000;
   const SETTLE_DELAY_MS = 400;
   const CONVERT_TIMEOUT_MS = 30000;
-  const SEARCH_TIMEOUT_MS = 10000;
   const PARSE_TIMEOUT_MS = 5000;
   const TOTAL_BUDGET_MS = 240000;
   const PROGRESS_THROTTLE_MS = 250;
@@ -246,16 +245,15 @@ const ScrapLLMResearch = (function() {
     }
   }
 
+  // Throws on failure. A write that only logs and returns lets the popup show a
+  // finished run whose document is in no store at all — the worker then
+  // restarts and the file is gone with nothing having said so.
   async function writePersisted(value) {
     if (!store) {
       memoryStore = value;
       return;
     }
-    try {
-      await store.set({ [STATE_KEY]: value });
-    } catch (error) {
-      console.error('Research state write failed:', error);
-    }
+    await store.set({ [STATE_KEY]: value });
   }
 
   async function clearPersisted() {
@@ -272,9 +270,50 @@ const ScrapLLMResearch = (function() {
   // `state`, which is only the *current* run: a worker still finishing an
   // earlier run would have written that run's tabs into the new run's record,
   // and orphan recovery would then never close them.
-  async function persistState(run, extra) {
-    if (!run) return;
-    const payload = Object.assign({
+  //
+  // It is also one write at a time, and its payload is built *after* the read
+  // that precedes it: two workers opening a tab each used to snapshot
+  // `openTabIds`, interleave over the await and land the older set last, which
+  // left a tab orphan recovery could never find.
+  let persistChain = Promise.resolve();
+
+  function persistState(run, extra) {
+    if (!run) return Promise.resolve(true);
+    const next = persistChain.then(() => persistOnce(run, extra));
+    persistChain = next.then(() => {}, () => {});
+    return next;
+  }
+
+  // Resolves true when the state is in the store, false when the store refused
+  // it. Never rejects: persistence is bookkeeping, and a run that produced a
+  // document must not be turned into an error by a storage quota.
+  async function persistOnce(run, extra) {
+    const previous = await readPersisted();
+    const payload = buildPersistPayload(run);
+
+    // An absent `document` key means "carry whatever is there forward"; an
+    // explicit `document: null` means "this run has no document to keep". They
+    // used to be the same value, so dropping an over-sized document wrote the
+    // *previous* run's document back under this run's id, and a recovered run
+    // then showed the earlier run's filename.
+    const explicitDocument = extra && Object.prototype.hasOwnProperty.call(extra, 'document');
+    Object.assign(payload, extra || {});
+    if (!explicitDocument && previous && previous.document &&
+        previous.document.runId === run.runId) {
+      payload.document = previous.document;
+    }
+
+    try {
+      await writePersisted(payload);
+      return true;
+    } catch (error) {
+      console.error('Research state write failed:', error);
+      return false;
+    }
+  }
+
+  function buildPersistPayload(run) {
+    return {
       runId: run.runId,
       phase: run.phase,
       query: run.query,
@@ -293,13 +332,7 @@ const ScrapLLMResearch = (function() {
       })),
       expiresAt: run.expiresAt,
       resultsTooLargeToPersist: run.resultsTooLargeToPersist
-    }, extra || {});
-
-    const previous = await readPersisted();
-    if (previous && previous.document && !payload.document) {
-      payload.document = previous.document;
-    }
-    await writePersisted(payload);
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -1110,14 +1143,20 @@ const ScrapLLMResearch = (function() {
     run.windowId = await currentWindowId();
 
     let search;
-    const searchTimer = setTimeout(() => run.controller.abort(), SEARCH_TIMEOUT_MS);
+    // No run-level search timer. `run.controller` is the whole run's abort
+    // signal — the quiet captures share it — so a timer on it would not have
+    // stopped discovery, it would have killed every capture still in flight,
+    // and the raw AbortError would have reached the sheet as "The user aborted
+    // a request." Discovery is already bounded where the request is made:
+    // search.js gives each endpoint attempt its own 10 s AbortController, and
+    // the run's own 4-minute budget caps the rest. `run.controller` is aborted
+    // by `cancel()` and by nothing else.
     try {
       search = await ScrapLLMSearch.findSources(run.query, {
         limit: run.sourceCount,
         signal: run.controller.signal
       });
     } catch (error) {
-      clearTimeout(searchTimer);
       if (run.cancelled) {
         run.phase = 'cancelled';
         broadcast(true);
@@ -1130,7 +1169,6 @@ const ScrapLLMResearch = (function() {
       await persistState(run);
       return;
     }
-    clearTimeout(searchTimer);
 
     run.engine = search.engine;
     run.degraded = search.degraded;
@@ -1180,10 +1218,22 @@ const ScrapLLMResearch = (function() {
     };
     run.expiresAt = lastDocument.expiresAt;
 
-    const tooLarge = markdown.length > MAX_PERSIST_BYTES;
+    // Bytes, not characters: the store holds UTF-8, and a run over CJK pages is
+    // roughly three bytes per character — 4 M characters passed a 5 MiB
+    // character check and then blew the quota on write.
+    const tooLarge = new TextEncoder().encode(markdown).length > MAX_PERSIST_BYTES;
     run.resultsTooLargeToPersist = tooLarge;
 
-    await persistState(run, tooLarge ? { document: null } : { document: lastDocument });
+    const persisted = await persistState(run, tooLarge ? { document: null } : { document: lastDocument });
+
+    // The store refused the write anyway. The document is only in this worker's
+    // memory now, which is exactly what the popup's warning is for, so say it
+    // rather than showing a clean result over nothing.
+    if (!persisted && !tooLarge) {
+      run.resultsTooLargeToPersist = true;
+      await persistState(run, { document: null });
+    }
+
     broadcast(true);
   }
 
@@ -1221,8 +1271,13 @@ const ScrapLLMResearch = (function() {
     return state ? buildSnapshot() : lastSnapshot;
   }
 
+  // The run id is required and has to match. The document holds pages captured
+  // with the user's session; handing it to a caller that cannot name the run it
+  // belongs to was a way to read the last run without having started one.
   async function getDocument(runId) {
-    if (lastDocument && (!runId || lastDocument.runId === runId) &&
+    if (!runId) return null;
+
+    if (lastDocument && lastDocument.runId === runId &&
         Date.now() < lastDocument.expiresAt) {
       return {
         filename: lastDocument.filename,
@@ -1233,7 +1288,7 @@ const ScrapLLMResearch = (function() {
 
     const persisted = await readPersisted();
     const doc = persisted && persisted.document;
-    if (doc && (!runId || doc.runId === runId) && Date.now() < doc.expiresAt) {
+    if (doc && doc.runId === runId && Date.now() < doc.expiresAt) {
       return {
         filename: doc.filename,
         markdown: doc.markdown,
@@ -1283,10 +1338,16 @@ const ScrapLLMResearch = (function() {
 
     if (persisted.document) {
       lastDocument = persisted.document;
-      await writePersisted(Object.assign({}, persisted, {
-        phase: 'interrupted',
-        openTabIds: []
-      }));
+      try {
+        await writePersisted(Object.assign({}, persisted, {
+          phase: 'interrupted',
+          openTabIds: []
+        }));
+      } catch (error) {
+        // The tabs are already closed and the document is already in memory;
+        // a refused write here only costs the record after another restart.
+        console.error('Research state write failed:', error);
+      }
     } else {
       await clearPersisted();
     }
