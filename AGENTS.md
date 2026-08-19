@@ -55,6 +55,7 @@ shows verbatim.
 | `getSelectionInfo` | popup → content | Is there a selection? (drives the Copy Selection button) |
 | `getChatInfo` | popup → content | Is this a conversation? (drives the Copy Chat button) |
 | `getDebugLogs`, `copyToClipboard`, `downloadMarkdown`, `downloadFile`, `showNotification` | popup → content | Utilities |
+| `scrapllm-research` (port) | popup ⇄ background | Long-lived research channel: `start`, `cancel`, `sync`, `getDocument` up; `snapshot`, `accepted`, `document`, `error` down. Also keeps the MV3 worker alive for the run. |
 
 ### Extractors
 
@@ -85,6 +86,52 @@ answers with the bot check.
 **`x.js`** — threads, profiles and timelines. Signed-out x.com serves a
 server-rendered page with schema.org microdata and no `data-testid`; the
 extractor reads that, with the logged-in app's selectors as per-field fallbacks.
+
+### Research
+
+One question in, one Markdown file out. Two stages, both in the background:
+
+1. **Discovery** — `search.js` fetches DuckDuckGo's `html.duckduckgo.com/html/`
+   endpoint (falling back to `lite.duckduckgo.com/lite/`) and parses the reply
+   with string and regex work on the raw text. There is no `DOMParser` in a
+   service worker, and an offscreen document was rejected for the same reason it
+   would not help: the markup we need is plain enough to match, while a parsed
+   document pins its base URI to the extension and still runs no page JS. The
+   module is pure — no tabs, no storage, no messaging — so it is testable on
+   fixtures alone. Candidates are filtered (non-pages, login walls, paywalls,
+   duplicate hosts and URLs), scored, and cut to the requested count; every
+   dropped candidate keeps the reason it was dropped.
+2. **Capture** — `research.js` opens one muted background tab per accepted
+   source, polls `ping` until the declaratively injected content script answers,
+   then sends the ordinary `convertToMarkdown` action. No new content-script
+   action exists, and the research path never calls
+   `ensureContentScriptLoaded`: it has no host permission off the active tab.
+
+Brave Search was rejected as a fallback (rate limited after a handful of
+queries, build-hashed class names) and the Google News RSS recency booster was
+rejected because its links only resolve inside a real tab. Recency is `&df=d` on
+DuckDuckGo instead.
+
+Research tabs always force `triggerLazyLoading: false` — a background tab is
+never rendered, so a scroll pass would spend the budget and change nothing — and
+every captured source says so, in its row in the popup and in a `Note:` line in
+the document. X hosts carry a second note about virtualised timelines.
+
+| Constant | Value |
+|----------|-------|
+| `RESEARCH_CONCURRENCY` | 3 (the multi-tab path keeps 4) |
+| `PING_INTERVAL_MS` / `PAGE_LOAD_TIMEOUT_MS` | 250 / 20000 |
+| `SETTLE_DELAY_MS` / `CONVERT_TIMEOUT_MS` | 400 / 30000 |
+| `SEARCH_TIMEOUT_MS` / `TOTAL_BUDGET_MS` | 10000 / 240000 |
+| `PROGRESS_THROTTLE_MS` / `RESULT_RETENTION_MS` | 250 / 600000 |
+| `MAX_PERSIST_BYTES` | 5242880 |
+
+New host permissions: `https://html.duckduckgo.com/*` and
+`https://lite.duckduckgo.com/*`. Nothing else — background tabs need none.
+
+Run state lives in `storage.session` when the browser has it (Chrome, Firefox
+115+) and in a module variable otherwise; either way `recoverOrphans()` runs at
+module evaluation and closes tabs a crashed or restarted worker left behind.
 
 ### Motion and interface
 
@@ -123,11 +170,24 @@ grows the layout.
    `getCurrentSettings`, the two inline conversion payloads, and a change listener.
 4. Read it in `content.js` or the relevant extractor.
 
+Worked example — `researchSourceCount` (default `8`, allowed 5 / 8 / 12): the
+default sits in `settings.js`, the segmented control lives in the research
+sheet in `popup.html`, `popup.js` carries the element handle plus `loadSettings`,
+`saveSettings`, `getCurrentSettings` and a change listener, and it is consumed
+only by `research.js` through the `start` payload — research is a background
+concern, so no extractor reads it. `research.js` re-clamps to 5..12 whatever
+the popup sends.
+
 ## Adding a file to the extension
 
 `manifest.json` (`content_scripts[0].js`, order matters — helpers before
 `content.js`) **and** `scripts/build.sh`, which copies files explicitly in three
 places (Chrome, Firefox, source).
+
+A background-only file is not a content script: add it to the `importScripts`
+call at the top of `background.js` (Chrome) and to the `background.scripts`
+array in the build script's Firefox jq program, in load order. `search.js` and
+`research.js` are the examples.
 
 ## Browser differences
 

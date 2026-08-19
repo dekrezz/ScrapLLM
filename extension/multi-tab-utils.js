@@ -13,70 +13,91 @@ const MultiTabUtils = (function() {
     return `You are about to process ${tabCount} tabs. This may take some time and use significant memory. Do you want to continue?`;
   }
 
-  // Process multiple tabs with concurrency limit using worker pool pattern
+  // Index-cursor worker pool. Shared by the multi-tab path (4 at a time) and
+  // by the research engine (3 at a time). `handler` must resolve, never reject:
+  // a rejection would sink the whole pool.
+  async function runPool(items, concurrency, handler) {
+    const total = items.length;
+    const results = new Array(total);
+    let nextIndex = 0;
+
+    // JavaScript is single-threaded, so the cursor needs no locking.
+    async function worker() {
+      while (nextIndex < total) {
+        const index = nextIndex++;
+        results[index] = await handler(items[index], index);
+      }
+    }
+
+    const workerCount = Math.max(0, Math.min(concurrency, total));
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
+  }
+
+  // Ask one tab's content script for its Markdown. Never throws: a dead tab or
+  // a refused message comes back as a failure object with the reason intact.
+  async function convertTabToMarkdown(tabId, settings, browserAPI) {
+    try {
+      const response = await browserAPI.tabs.sendMessage(tabId, {
+        action: "convertToMarkdown",
+        settings: settings
+      });
+
+      if (response && response.success) {
+        return {
+          success: true,
+          markdown: response.markdown,
+          tokenCount: response.tokenCount || 0,
+          metadata: response.metadata
+        };
+      }
+
+      return {
+        success: false,
+        error: (response && response.error) || "Conversion failed"
+      };
+    } catch (error) {
+      const errorMessage = error.message || "Failed to communicate with tab";
+      console.error(errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  // Process multiple tabs with concurrency limit using the worker pool
   async function processMultipleTabs(tabs, settings, browserAPI, progressCallback) {
     const total = tabs.length;
     const MAX_CONCURRENT = 4; // Max tabs processing simultaneously
-    const results = new Array(total);
     let completed = 0;
-    let nextIndex = 0;
 
     if (progressCallback) {
       progressCallback(`Converting ${total} tabs...`);
     }
 
-    // Worker consumes tabs from the queue until exhausted
-    async function worker() {
-      // Each worker loops, grabbing the next available tab index.
-      // JavaScript is single-threaded, so nextIndex reads/writes are safe.
-      while (nextIndex < total) {
-        const index = nextIndex++;
-        const tab = tabs[index];
+    const results = await runPool(tabs, MAX_CONCURRENT, async (tab) => {
+      const outcome = await convertTabToMarkdown(tab.id, settings, browserAPI);
 
-        try {
-          const response = await browserAPI.tabs.sendMessage(tab.id, {
-            action: "convertToMarkdown",
-            settings: settings
-          });
-
-          if (response.success) {
-            results[index] = {
-              success: true,
-              tab: tab,
-              markdown: response.markdown,
-              metadata: response.metadata,
-              tokenCount: response.tokenCount || 0
-            };
-          } else {
-            results[index] = {
-              success: false,
-              tab: tab,
-              error: response.error || "Conversion failed"
-            };
-          }
-        } catch (error) {
-          const errorMessage = error.message || "Failed to communicate with tab";
-          console.error(errorMessage);
-          results[index] = {
-            success: false,
-            tab: tab,
-            error: errorMessage,
-          };
+      const result = outcome.success
+        ? {
+          success: true,
+          tab: tab,
+          markdown: outcome.markdown,
+          metadata: outcome.metadata,
+          tokenCount: outcome.tokenCount || 0
         }
+        : {
+          success: false,
+          tab: tab,
+          error: outcome.error
+        };
 
-        completed++;
-        if (progressCallback && total > MAX_CONCURRENT) {
-          progressCallback(`Converted ${completed} of ${total} tabs...`);
-        }
+      completed++;
+      if (progressCallback && total > MAX_CONCURRENT) {
+        progressCallback(`Converted ${completed} of ${total} tabs...`);
       }
-    }
 
-    // Start worker pool
-    const workerCount = Math.min(MAX_CONCURRENT, total);
-    const workers = Array.from({ length: workerCount }, () => worker());
+      return result;
+    });
 
-    // Wait for all workers to finish
-    await Promise.all(workers);
     return results;
   }
 
@@ -193,6 +214,8 @@ const MultiTabUtils = (function() {
 
   // Public API
   return {
+    runPool,
+    convertTabToMarkdown,
     processMultipleTabs,
     mergeMarkdownResults,
     generateUniqueFilename,

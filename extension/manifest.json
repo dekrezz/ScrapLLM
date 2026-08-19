@@ -25,7 +25,9 @@
     "menus"
   ],
   "host_permissions": [
-    "https://tiktoken.pages.dev/*"
+    "https://tiktoken.pages.dev/*",
+    "https://html.duckduckgo.com/*",
+    "https://lite.duckduckgo.com/*"
   ],
   "action": {
     "default_popup": "popup.html",

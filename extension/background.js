@@ -1,12 +1,13 @@
 // ScrapLLM Background Script
 // Handles keyboard shortcuts and background tasks
-// Dependencies: libs/jszip.min.js, settings.js, and multi-tab-utils.js
+// Dependencies: libs/jszip.min.js, settings.js, multi-tab-utils.js, search.js
+// and research.js
 // (loaded via manifest in Firefox, or importScripts in Chrome service worker)
 
 // Load dependencies for Chrome service worker (not needed in Firefox)
 if (typeof importScripts === 'function') {
   try {
-    importScripts('libs/jszip.min.js', 'settings.js', 'multi-tab-utils.js');
+    importScripts('libs/jszip.min.js', 'settings.js', 'multi-tab-utils.js', 'search.js', 'research.js');
   } catch (e) {
     console.error('Failed to load dependencies:', e);
     throw new Error('Critical dependencies failed to load. Please reinstall the extension.');
@@ -52,12 +53,18 @@ const browserAPI = (function() {
     api.tabs = {
       query: promisify(chrome.tabs.query, chrome.tabs),
       sendMessage: promisify(chrome.tabs.sendMessage, chrome.tabs),
+      create: promisify(chrome.tabs.create, chrome.tabs),
+      get: promisify(chrome.tabs.get, chrome.tabs),
+      remove: promisify(chrome.tabs.remove, chrome.tabs),
+      update: promisify(chrome.tabs.update, chrome.tabs),
       onHighlighted: chrome.tabs.onHighlighted,
-      onActivated: chrome.tabs.onActivated
+      onActivated: chrome.tabs.onActivated,
+      onRemoved: chrome.tabs.onRemoved
     };
     
     api.runtime = {
       onMessage: chrome.runtime.onMessage,
+      onConnect: chrome.runtime.onConnect,
       onInstalled: chrome.runtime.onInstalled,
       onStartup: chrome.runtime.onStartup,
       getURL: chrome.runtime.getURL,
@@ -90,6 +97,16 @@ const browserAPI = (function() {
         }
       }
     };
+
+    // storage.session only exists on Chrome 102+. Feature-detect rather than
+    // assume: research falls back to an in-memory store when it is missing.
+    if (chrome.storage.session) {
+      api.storage.session = {
+        get: promisify(chrome.storage.session.get, chrome.storage.session),
+        set: promisify(chrome.storage.session.set, chrome.storage.session),
+        remove: promisify(chrome.storage.session.remove, chrome.storage.session)
+      };
+    }
     
     api.commands = {
       onCommand: chrome.commands.onCommand
@@ -567,3 +584,87 @@ async function handleKeyboardShortcut(command) {
 browserAPI.commands.onCommand.addListener(async (command) => {
   await handleKeyboardShortcut(command);
 });
+
+// ---------------------------------------------------------------------------
+// Research: long-lived port to the popup
+// ---------------------------------------------------------------------------
+// A port rather than runtime.sendMessage, for two reasons: the popup needs a
+// stream of snapshots, and an open port keeps the MV3 service worker alive for
+// the length of a run.
+
+const RESEARCH_PORT_NAME = 'scrapllm-research';
+const RESULTS_GONE_MESSAGE = 'Run results are no longer available — please run it again.';
+const researchPorts = new Set();
+
+function postToPort(port, message) {
+  try {
+    port.postMessage(message);
+  } catch (error) {
+    // The popup closed between the snapshot and the post; drop the port.
+    researchPorts.delete(port);
+  }
+}
+
+ScrapLLMResearch.init(browserAPI);
+
+ScrapLLMResearch.onProgress((snapshot) => {
+  researchPorts.forEach(port => postToPort(port, { type: 'snapshot', snapshot }));
+});
+
+browserAPI.runtime.onConnect.addListener((port) => {
+  if (port.name !== RESEARCH_PORT_NAME) return;
+
+  researchPorts.add(port);
+  postToPort(port, { type: 'snapshot', snapshot: ScrapLLMResearch.getSnapshot() });
+
+  port.onDisconnect.addListener(() => {
+    researchPorts.delete(port);
+  });
+
+  port.onMessage.addListener(async (message) => {
+    if (!message || !message.type) return;
+
+    if (message.type === 'start') {
+      try {
+        const runId = await ScrapLLMResearch.start({
+          query: message.query,
+          sourceCount: message.sourceCount,
+          settings: message.settings
+        });
+        postToPort(port, { type: 'accepted', runId });
+      } catch (error) {
+        postToPort(port, { type: 'error', message: error.message || String(error) });
+      }
+      return;
+    }
+
+    if (message.type === 'cancel') {
+      ScrapLLMResearch.cancel(message.runId);
+      return;
+    }
+
+    if (message.type === 'sync') {
+      postToPort(port, { type: 'snapshot', snapshot: ScrapLLMResearch.getSnapshot() });
+      return;
+    }
+
+    if (message.type === 'getDocument') {
+      const doc = await ScrapLLMResearch.getDocument(message.runId);
+      if (!doc) {
+        postToPort(port, { type: 'error', message: RESULTS_GONE_MESSAGE });
+        return;
+      }
+      postToPort(port, {
+        type: 'document',
+        runId: message.runId,
+        filename: doc.filename,
+        markdown: doc.markdown,
+        tokenCount: doc.tokenCount
+      });
+    }
+  });
+});
+
+// A worker restart (or a crash) can leave research tabs open with nobody to
+// close them. Runs at module evaluation, before any new run can start.
+ScrapLLMResearch.recoverOrphans();

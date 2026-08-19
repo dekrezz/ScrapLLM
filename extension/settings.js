@@ -39,7 +39,10 @@ const SettingsUtils = (function() {
       // no cap, bounded only by the extractor's own time budget.
       xMaxPosts: 100,
       // Whether a thread capture includes the replies under the focused post.
-      xIncludeReplies: true
+      xIncludeReplies: true,
+      // Research: how many sources one run tries to capture. The picker offers
+      // 5 / 8 / 12; research.js re-clamps to 5..12 whatever arrives.
+      researchSourceCount: 8
     });
   }
 
