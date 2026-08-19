@@ -47,6 +47,13 @@
             <div class="main-controls">
               <!-- Single-tab actions -->
               <div id="singleTabActions" class="action-buttons">
+                <!-- Only rendered when the page actually has a selection -->
+                <button id="copySelectionBtn" class="primary-btn selection-btn hidden" type="button" title="Copy the highlighted fragment with its source and line range">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="btn-icon">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 6.75h15M4.5 12h9M4.5 17.25h6" />
+                  </svg>
+                  <span class="btn-text">Copy Selection</span>
+                </button>
                 <div id="convertSplit" class="split-btn">
                   <button id="convertBtn" class="primary-btn split-btn-main" type="button" title="Convert this page to Markdown and copy to clipboard">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="btn-icon">

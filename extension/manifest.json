@@ -44,6 +44,7 @@
         "libs/readability.js",
         "libs/turndown.js",
         "motion.js",
+        "selection.js",
         "reddit.js",
         "x.js",
         "content.js"

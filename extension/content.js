@@ -109,6 +109,20 @@
       return true;
     }
 
+    // Selection probe: the popup asks on open whether the page has a selection
+    // worth offering a dedicated button for.
+    if (request.action === 'getSelectionInfo') {
+      try {
+        const info = typeof LLMFeederSelection !== 'undefined'
+          ? LLMFeederSelection.inspect()
+          : { hasSelection: false };
+        sendResponse({ success: true, info });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+      return true;
+    }
+
     // Get debug logs handler
     if (request.action === 'getDebugLogs') {
       sendResponse({ success: true, logs: DebugLog.getLogs() });
@@ -637,6 +651,25 @@
           DebugLog.log('Lazy load detected but no scrollable container; skipping scroll-pass');
         }
       }
+    }
+
+    // A highlighted fragment is an excerpt, not a page: it gets a source line,
+    // a line range and a code fence when the fragment is code.
+    if (settings.contentScope === 'selection' && typeof LLMFeederSelection !== 'undefined') {
+      const excerpt = LLMFeederSelection.convert(settings, {
+        logger: {
+          log: (message, data) => DebugLog.log(message, data),
+          error: (message, error) => DebugLog.error(message, error)
+        },
+        createTurndown: () => configureTurndownService(settings)
+      });
+      if (excerpt) {
+        // The header already names the source, so the metadata block would
+        // repeat it.
+        const excerptSettings = Object.assign({}, settings, { includeMetadata: false });
+        return postProcessMarkdown(excerpt.markdown, excerptSettings, excerpt.articleData);
+      }
+      throw new Error('No text is selected');
     }
 
     const docClone = document.cloneNode(true);

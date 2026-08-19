@@ -64,6 +64,7 @@ This architecture ensures that your content remains exclusively on your device t
 ## Features
 
 - **Multi-Tab Support**: Convert multiple selected tabs at once - merge into single file or download as ZIP
+- **Copy Selection**: A dedicated button appears whenever text is highlighted — it detects whether the fragment is code or prose, fences code with its language, and prefixes the excerpt with the line range and source it came from
 - **Reddit Mode**: On Reddit, copies the post *and* its full comment tree — subreddit, flair, score, author, nesting — instead of the article-only extraction
 - **X (Twitter) Mode**: On x.com, copies the thread — post, self-thread continuation, quoted posts, replies, media and engagement counts — or a numbered index of a profile, feed or search timeline
 - **Fluid Interface**: Spring-driven, interruptible motion with drag gestures (swipe between panels, swipe notifications away), instant press feedback, translucent materials, and full support for reduced-motion, reduced-transparency and high-contrast settings
@@ -263,6 +264,7 @@ LLMFeeder/
 │   ├── reddit.js              # Reddit-specific extraction (post + comment tree)
 │   ├── x.js                   # X (Twitter) extraction (thread + replies, timelines)
 │   ├── motion.js              # Spring + gesture runtime for the UI
+│   ├── selection.js           # Highlighted-fragment excerpts (code vs prose, line range)
 │   └── background.js          # Background script for keyboard shortcuts
 │
 ├── scripts/                   # Build and utility scripts
@@ -283,6 +285,7 @@ LLMFeeder/
 - **reddit.js**: Renders Reddit threads and listings from Reddit's own JSON (with a DOM fallback) so comments survive the conversion
 - **x.js**: Renders X threads and timelines from the page itself, scrolling the virtualised list and reading post metadata from schema.org microdata (signed-out view) or the app's `data-testid` markup (signed-in view)
 - **motion.js**: Springs, pointer-gesture tracking, momentum projection and press feedback shared by the popup and the in-page notification
+- **selection.js**: Turns a highlighted fragment into a cited excerpt — classifies code vs prose, detects the language, counts the line range and names the source
 - **background.js**: Handles keyboard shortcuts and global extension functionality
 - **readability.js**: Mozilla's library that identifies and extracts the main content from a webpage
 - **turndown.js**: Converts HTML to Markdown with configurable options

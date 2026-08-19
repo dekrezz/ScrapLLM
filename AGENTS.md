@@ -41,6 +41,7 @@ git push origin feature/your-feature-name
 - `extension/reddit.js` - Reddit thread/listing extraction (post + comment tree)
 - `extension/x.js` - X (Twitter) thread/timeline extraction (post + replies)
 - `extension/motion.js` - Spring + gesture runtime shared by popup and content script
+- `extension/selection.js` - Highlighted-fragment excerpts (code vs prose, line range, source)
 - `extension/popup.js` - Popup UI and settings handling
 - `extension/popup.html` - UI structure
 - `extension/styles.css` - Styling
@@ -70,6 +71,7 @@ LLMFeeder/
 │   ├── reddit.js             # Reddit extractor (JSON API + DOM fallback)
 │   ├── x.js                  # X (Twitter) extractor (microdata + DOM, scroll collection)
 │   ├── motion.js             # Springs, gesture tracking, press feedback
+│   ├── selection.js          # Selection excerpts (code detection, line range)
 │   └── background.js         # Background script for keyboard shortcuts
 │
 ├── scripts/
@@ -109,6 +111,7 @@ Edit files in the `extension/` directory based on your feature:
 | Reddit post/comment output | `reddit.js` |
 | X (Twitter) thread/timeline output | `x.js` |
 | Motion, gestures, press feedback | `motion.js` |
+| Selection excerpt output | `selection.js` |
 | Keyboard shortcuts | `background.js`, `manifest.json` |
 | Permissions | `manifest.json` |
 
@@ -260,6 +263,30 @@ Relevant settings: `xMode` (default on), `xMaxPosts` (number or `'all'`),
 | `showNotification` | popup.js → content.js |
 
 ---
+
+### Selection Extractor (`selection.js`)
+
+`contentScope: 'selection'` routes through `LLMFeederSelection.convert()` instead
+of the generic Turndown pass, and the popup shows a dedicated blue **Copy
+Selection** button whenever `getSelectionInfo` reports a live selection.
+
+| Function | Purpose |
+|----------|---------|
+| `inspect()` | Cheap probe for the popup: has selection, code or prose, language, line range |
+| `convert(settings, deps)` | `{ markdown, articleData }` or `null` when nothing is selected |
+| `looksLikeCode(text)` | Scored heuristic (indentation, statement punctuation, declarations) used when the DOM gives no signal |
+| `describeLines(...)` | Line numbers inside a code block; paragraph-block indices for prose |
+
+Output always starts with `> Lines A to B of code|text from [host/path](url)`.
+Code is emitted verbatim inside a fence (dedented, fence length adapted to any
+backticks inside) because Turndown escapes the punctuation that makes code
+readable; prose goes through the configured Turndown instance. The metadata
+block is suppressed for excerpts — the header already names the source.
+
+Structure wins over heuristics: a highlighter's own markup (`pre`, `.highlight`,
+`language-*`, `hljs-*`, `data-lang`) is authoritative, and a versioned class
+like `highlight-python3` normalises to `python`. A language is only guessed when
+the signal is unambiguous — a wrong fence label is worse than none.
 
 ## Interface Design
 

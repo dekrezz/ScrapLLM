@@ -479,6 +479,20 @@ a.icon-btn {
   filter: brightness(1.06);
 }
 
+/* Selection action: a second primary, kept in the system blue so it reads as a
+   different kind of copy rather than a competing version of the same one. */
+.selection-btn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--primary-color) 86%, white) 0%,
+    var(--primary-color) 55%,
+    color-mix(in srgb, var(--primary-color) 88%, black) 100%);
+  color: #fff;
+}
+
+.selection-btn.hidden {
+  display: none !important;
+}
+
 /* Pressed: it sinks — scale in, shadow collapses toward the surface, the
    gradient flattens. All of it starts on pointer-down. */
 .primary-btn.is-pressed {

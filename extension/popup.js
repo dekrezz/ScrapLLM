@@ -87,6 +87,7 @@ const convertMenuBtn = document.getElementById("convertMenuBtn");
 const convertMenu = document.getElementById("convertMenu");
 const convertOverrideBtn = document.getElementById("convertOverrideBtn");
 const convertOverrideLabel = convertOverrideBtn ? convertOverrideBtn.querySelector(".override-label") : null;
+const copySelectionBtn = document.getElementById("copySelectionBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const statusIndicator = document.getElementById("statusIndicator");
 
@@ -381,6 +382,26 @@ function updateShortcutDisplay() {
     });
   }
 
+}
+
+// Offer the selection action only when there is a selection to act on: a
+// button that is present but inert teaches people to ignore it.
+async function initSelectionAction() {
+  try {
+    const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
+    if (!tabs || tabs.length === 0) return;
+
+    const response = await browserAPI.tabs.sendMessage(tabs[0].id, { action: "getSelectionInfo" });
+    const info = response && response.success ? response.info : null;
+    if (!info || !info.hasSelection) return;
+
+    // The kind and line range end up in the copied text itself, so the button
+    // stays a plain label.
+    copySelectionBtn.classList.remove("hidden");
+  } catch (error) {
+    // Restricted pages (store, about:, PDF viewer) have no content script.
+    // Staying silent is the correct outcome, not an error to report.
+  }
 }
 
 // Load user settings
@@ -962,6 +983,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initTheme();
   updateShortcutDisplay();
   await loadSettings();
+  initSelectionAction();
 
   // Detect multi-tab selection (non-blocking, runs in background)
   // UI defaults to single-tab mode, then switches if multiple tabs detected
@@ -974,6 +996,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     closeConvertMenu();
     convertToMarkdown();
   });
+  copySelectionBtn.addEventListener("click", () => convertToMarkdown("selection"));
   downloadBtn.addEventListener("click", downloadMarkdown);
 
   // Convert split-button menu (override contentScope for one-shot full-page copy)
