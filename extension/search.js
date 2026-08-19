@@ -70,6 +70,18 @@ const ScrapLLMSearch = (function() {
     '&nbsp;': ' '
   };
 
+  // A malformed entity is text, not a crash: anything outside the Unicode range
+  // (or a surrogate half) is left exactly as it was written.
+  function fromCodePoint(code, fallback) {
+    if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return fallback;
+    if (code >= 0xd800 && code <= 0xdfff) return fallback;
+    try {
+      return String.fromCodePoint(code);
+    } catch (e) {
+      return fallback;
+    }
+  }
+
   function decodeEntities(text) {
     if (!text) return '';
     return text
@@ -78,14 +90,8 @@ const ScrapLLMSearch = (function() {
           ? NAMED_ENTITIES[match.toLowerCase()]
           : match;
       })
-      .replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
-        const code = parseInt(hex, 16);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
-      })
-      .replace(/&#(\d+);/g, (match, dec) => {
-        const code = parseInt(dec, 10);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
-      });
+      .replace(/&#x([0-9a-f]+);/gi, (match, hex) => fromCodePoint(parseInt(hex, 16), match))
+      .replace(/&#(\d+);/g, (match, dec) => fromCodePoint(parseInt(dec, 10), match));
   }
 
   function cleanText(html) {
