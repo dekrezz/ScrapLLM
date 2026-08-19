@@ -126,8 +126,51 @@ the document. X hosts carry a second note about virtualised timelines.
 | `PROGRESS_THROTTLE_MS` / `RESULT_RETENTION_MS` | 250 / 600000 |
 | `MAX_PERSIST_BYTES` | 5242880 |
 
+Every constant above is a guard, not a preference. 20 s of ping polling is what
+separates "the page is slow" from "nothing will ever run here" (a PDF in the
+browser's viewer, an interstitial, a tab that was closed under us) — the load
+event is not used at all, because a script-heavy page answers a ping long before
+`complete` and a stalled subresource can hold `complete` forever. 30 s caps a
+content script that accepted the message and never replied. 4 minutes caps the
+run itself, so a slow tail comes back as `skipped` rather than as a popup that
+never finishes; three concurrent tabs is what keeps a run from behaving like a
+crawler on the user's own machine and network. Each limit produces its own
+verbatim message, and every one of them lands in the popup row *and* in the
+document's `### Not fetched` block.
+
+Discovery failures are classified rather than flattened, in this order: a
+zero-result marker is an empty answer, not an error; an anomaly banner is
+throttling and never triggers the fallback (it is IP-level, so the sibling
+endpoint would fail the same way); a 200 with no parsable blocks and no marker
+is markup drift and says so. A half-filled result set is never returned as a
+success.
+
 New host permissions: `https://html.duckduckgo.com/*` and
 `https://lite.duckduckgo.com/*`. Nothing else — background tabs need none.
+
+The popup talks to the engine over one long-lived port, `scrapllm-research`,
+opened on `DOMContentLoaded`. There is no `runtime.sendMessage` path: the popup
+needs a stream, and an open port is also what keeps the MV3 worker alive for the
+length of a run.
+
+| Direction | Message |
+|-----------|---------|
+| popup → background | `start {query, sourceCount, settings}`, `cancel {runId}`, `sync {}`, `getDocument {runId}` |
+| background → popup | `snapshot {snapshot}` (throttled to 250 ms, always flushed on a phase change), plus `accepted`, `document` and `error` replies |
+
+The snapshot is the whole UI state — phase, counts, per-source rows with their
+status and note, and the rejected candidates. Markdown never travels in a
+snapshot; the popup asks for the document once, at the end.
+
+`multi-tab-utils.js` owns the two pieces both paths share: `runPool` (index
+cursor, dense results, the handler must resolve rather than reject) and
+`convertTabToMarkdown`. The multi-tab path keeps its 4-way concurrency,
+research passes 3; neither has its own copy of the loop.
+
+Tests live in `tests/research.test.js`: fixture-driven parsing and filtering for
+`search.js`, and a fake `browserAPI` plus jest fake timers for the engine —
+concurrency, cancellation bookkeeping, the budget, orphan recovery and the
+document builder. Write them, never run them.
 
 Run state lives in `storage.session` when the browser has it (Chrome, Firefox
 115+) and in a module variable otherwise; either way `recoverOrphans()` runs at
