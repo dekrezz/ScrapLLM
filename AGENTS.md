@@ -117,17 +117,22 @@ One question in, one Markdown file out. Two stages, both in the background:
      `ensureContentScriptLoaded`.
 
    A source escalates from quiet to rendered on exactly these signals, in this
-   order, each carrying its own verbatim reason: a network failure or an
-   unusable content type is a **rejection** (a tab cannot help a PDF, and the
-   tab path's own habit of capturing Chrome's TLS interstitial as an article is
-   worse than saying "certificate has expired"); a non-2xx status, a redirect
-   onto a consent/login host, an empty `#root`/`#__next`/`app-root` shell, a
-   parse that failed, or fewer than 500 characters of Readability text is a
-   **render**. Reddit and X escalate before the fetch, because their extractors
-   need the live page. `MIN_TEXT_CHARS` is a guard, not a preference: over 30
-   measured pages the worst junk page yielded 98 characters and the weakest
-   genuine article 1385. Above the floor but under 1500 characters the capture
-   is kept *and* says how thin it was.
+   order, each carrying its own verbatim reason: a network failure, an unusable
+   content type, or a 404/410 is a **rejection** (a tab cannot help a PDF, it
+   cannot conjure a page the site says is not there — it would only capture the
+   site's error page and file it as a source — and the tab path's own habit of
+   capturing Chrome's TLS interstitial as an article is worse than saying
+   "certificate has expired"); any other non-2xx status, a redirect onto a
+   consent/login host, an empty `#root`/`#__next`/`app-root` shell, a parse that
+   failed, or fewer than 500 characters of Readability text is a **render**. The
+   split inside non-2xx is the point: a 403, 429 or 503 is usually a bot check
+   the user's own tab walks straight through, while 404 and 410 are final.
+   Reddit and X escalate before the fetch, because their extractors need the
+   live page (on every host form they claim: `x.com`, `twitter.com` and any
+   subdomain of either, and any subdomain of `reddit.com`). `MIN_TEXT_CHARS` is
+   a guard, not a preference: over 30 measured pages the worst junk page
+   yielded 98 characters and the weakest genuine article 1385. Above the floor
+   but under 1500 characters the capture is kept *and* says how thin it was.
 
    The parsing needs a DOM. Chrome MV3 has none in the worker, so it uses one
    offscreen document (`offscreen.html`, reason `DOM_PARSER`) for the whole run,

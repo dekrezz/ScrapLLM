@@ -990,6 +990,32 @@ describe('ScrapLLMQuietCapture.classify', () => {
     expect(verdict).toEqual({ decision: 'render', reason: 'Server answered 403, so a tab was opened' });
   });
 
+  it('fails a 404 or 410 outright, because no tab can render a page that is gone', () => {
+    const quiet = loadQuietCapture();
+    [404, 410].forEach(status => {
+      // A tab would load the site's own error page and the run would file that
+      // as a captured source, which is exactly what must not happen.
+      expect(quiet.classifyResponse(
+        { kind: 'httpError', status, contentType: 'text/html', finalUrl: 'https://a.com/x', html: '' },
+        'https://a.com/x'
+      )).toEqual({
+        decision: 'reject',
+        reason: `Server answered ${status}: the page is not there, and a tab cannot bring it back`
+      });
+      expect(quiet.classifyResponse(
+        { kind: 'text', status, contentType: 'text/plain', finalUrl: 'https://a.com/x', text: 'nope' },
+        'https://a.com/x'
+      ).decision).toBe('reject');
+    });
+    // Everything else non-2xx still gets its tab.
+    [429, 500, 503].forEach(status => {
+      expect(quiet.classifyResponse(
+        { kind: 'httpError', status, contentType: 'text/html', finalUrl: 'https://a.com/x', html: '' },
+        'https://a.com/x'
+      ).decision).toBe('render');
+    });
+  });
+
   it('escalates a redirect onto a consent host but not an ordinary one', () => {
     const quiet = loadQuietCapture();
     const consent = quiet.classifyResponse(

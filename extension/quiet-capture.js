@@ -27,6 +27,17 @@ const ScrapLLMQuietCapture = (function() {
 
   const PDF_MESSAGE = "PDFs open in the browser's viewer, where extensions cannot run";
 
+  // A 403, 429 or 503 is often a bot check the user's own tab walks straight
+  // through, so those escalate. 404 and 410 are the site saying the page is not
+  // there — a tab renders the site's error page and the run would file that as
+  // a capture. Same reasoning as the PDF: a rendering engine cannot help, so
+  // this is a rejection with the status in it, not an escalation.
+  const DEAD_STATUSES = [404, 410];
+
+  function deadStatusMessage(status) {
+    return `Server answered ${status}: the page is not there, and a tab cannot bring it back`;
+  }
+
   const TEXT_TYPES = ['text/plain', 'text/markdown', 'text/x-markdown'];
   const HTML_TYPES = ['text/html', 'application/xhtml+xml'];
 
@@ -168,6 +179,9 @@ const ScrapLLMQuietCapture = (function() {
     }
 
     if (result.kind === 'text') {
+      if (DEAD_STATUSES.includes(result.status)) {
+        return { decision: 'reject', reason: deadStatusMessage(result.status) };
+      }
       if (result.status < 200 || result.status > 299) {
         return { decision: 'render', reason: `Server answered ${result.status}, so a tab was opened` };
       }
@@ -175,6 +189,9 @@ const ScrapLLMQuietCapture = (function() {
     }
 
     if (result.kind === 'httpError') {
+      if (DEAD_STATUSES.includes(result.status)) {
+        return { decision: 'reject', reason: deadStatusMessage(result.status) };
+      }
       return { decision: 'render', reason: `Server answered ${result.status}, so a tab was opened` };
     }
 
@@ -230,6 +247,7 @@ const ScrapLLMQuietCapture = (function() {
     MIN_TEXT_CHARS,
     MIN_BODY_TEXT_CHARS,
     PDF_MESSAGE,
+    DEAD_STATUSES,
     fetchSource,
     preflight,
     classifyResponse,
