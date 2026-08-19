@@ -1035,6 +1035,28 @@ describe('ScrapLLMQuietCapture.classify', () => {
     expect(quiet.preflight('https://www.reddit.com/r/reactjs/comments/abc/x/', { redditMode: false })).toBeNull();
     expect(quiet.preflight('https://example.com/a', {})).toBeNull();
   });
+
+  it('sends every host form x.js claims to a tab, and no lookalike host', () => {
+    const quiet = loadQuietCapture();
+    // All of these serve the same posts, and a search result can name any of
+    // them; a fetched copy of any one loses the thread.
+    ['https://www.x.com/someone/status/42',
+      'https://www.twitter.com/someone/status/42',
+      'https://mobile.twitter.com/someone/status/42',
+      'https://twitter.com/someone/status/42'
+    ].forEach(url => {
+      expect(quiet.preflight(url, {}).decision).toBe('render');
+    });
+    ['https://old.reddit.com/r/reactjs/comments/abc/x/',
+      'https://np.reddit.com/r/reactjs/comments/abc/x/'
+    ].forEach(url => {
+      expect(quiet.preflight(url, {}).decision).toBe('render');
+    });
+    // A host that merely ends in the same letters is not X.
+    expect(quiet.preflight('https://notx.com/a', {})).toBeNull();
+    expect(quiet.preflight('https://xx.com/a', {})).toBeNull();
+    expect(quiet.preflight('https://www.x.com/someone/status/42', { xMode: false })).toBeNull();
+  });
 });
 
 describe('ScrapLLMResearch quiet path', () => {
@@ -1233,6 +1255,47 @@ describe('ScrapLLMResearch quiet path', () => {
     expect(state.created).toHaveLength(0);
     expect(entry.status).toBe('error');
     expect(entry.note).toBe("PDFs open in the browser's viewer, where extensions cannot run");
+  });
+
+  it('counts only the sources it actually captured, so the breakdown adds up', async () => {
+    const { api, state } = makeApi();
+    const pdf = 'https://example2.com/guides/topic-2';
+    const { engine } = loadEngine({
+      results: [source(1), source(2, { url: pdf }), source(3)],
+      fetchImpl: async (requested) => requested === pdf
+        ? {
+          status: 200,
+          url: requested,
+          headers: { get: () => 'application/pdf' },
+          text: async () => ''
+        }
+        : {
+          status: 200,
+          url: requested,
+          headers: { get: () => 'text/html; charset=utf-8' },
+          text: async () => '<html><body>a real article</body></html>'
+        },
+      convertHtml: ({ url }) => ({
+        markdown: `Body of ${url}`, title: `Title of ${url}`,
+        textLength: 4000, bodyTextLength: 6000, emptyAppShell: false, tokenCount: 30
+      })
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'one pdf', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(state.created).toHaveLength(0);
+    expect(snapshot.succeeded).toBe(2);
+    // The rejected PDF was captured on neither path: counting it would make the
+    // popup's "2 of 3 sources (…)" break down into three.
+    expect(snapshot.quiet + snapshot.rendered).toBe(snapshot.succeeded);
+    expect(snapshot.quiet).toBe(2);
+    expect(snapshot.rendered).toBe(0);
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Capture: 2 fetched without a tab, 0 rendered in a background tab');
   });
 
   it('renders everything and says so once when the popup reports no host access', async () => {

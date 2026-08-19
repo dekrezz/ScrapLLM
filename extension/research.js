@@ -152,8 +152,12 @@ const ScrapLLMResearch = (function() {
       deadline: state.deadline,
       tokenCount: entries.reduce((sum, e) => sum + (e.tokenCount || 0), 0),
       filename: state.filename,
-      quiet: entries.filter(e => e.path === 'quiet').length,
-      rendered: entries.filter(e => e.path === 'rendered').length,
+      // Successes only, because that is what the popup's sentence and the
+      // document's front matter both break down: a source that failed was
+      // captured on neither path, and counting it made "4 of 6 sources
+      // (3 without a tab, 3 rendered in one)" add up to the wrong number.
+      quiet: entries.filter(e => e.status === 'ok' && e.path === 'quiet').length,
+      rendered: entries.filter(e => e.status === 'ok' && e.path === 'rendered').length,
       resultsTooLargeToPersist: state.resultsTooLargeToPersist,
       error: state.error,
       entries: entries.map(e => ({
