@@ -453,7 +453,14 @@ describe('ScrapLLMResearch run engine', () => {
   function loadEngine({ searchResult, searchError, convert }) {
     jest.resetModules();
     delete global.ScrapLLMResearch;
+    delete global.ScrapLLMQuietCapture;
     require(MULTITAB_PATH);
+    // The same load order the background uses (importScripts on Chrome,
+    // background.scripts on Firefox). The engine reaches into
+    // ScrapLLMQuietCapture on *both* paths — a rendered source still has its
+    // destination checked — so leaving it out makes every run die on a
+    // ReferenceError instead of exercising the path under test.
+    require(QUIET_PATH);
 
     const findSources = jest.fn(async () => {
       if (searchError) throw searchError;
