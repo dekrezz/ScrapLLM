@@ -65,6 +65,7 @@ This architecture ensures that your content remains exclusively on your device t
 
 - **Multi-Tab Support**: Convert multiple selected tabs at once - merge into single file or download as ZIP
 - **Reddit Mode**: On Reddit, copies the post *and* its full comment tree — subreddit, flair, score, author, nesting — instead of the article-only extraction
+- **X (Twitter) Mode**: On x.com, copies the thread — post, self-thread continuation, quoted posts, replies, media and engagement counts — or a numbered index of a profile, feed or search timeline
 - **Fluid Interface**: Spring-driven, interruptible motion with drag gestures (swipe between panels, swipe notifications away), instant press feedback, translucent materials, and full support for reduced-motion, reduced-transparency and high-contrast settings
 - **Lazy-Loading Auto-Scroll**: Opt-in scroll pass for chat/AI UIs so long conversations aren't truncated
 - **Alternative Copy Mode**: One-click Full Page / Main Content override from the copy button
@@ -222,6 +223,11 @@ Users can customize keyboard shortcuts by following these steps:
   - Comment sort: Best / Top / New / Controversial / Old / Q&A
   - Max comments per thread: 50 / 100 / 250 / 500 / All
 
+- **X (Twitter)**:
+  - X mode on/off (on by default)
+  - Include replies in threads on/off (on by default)
+  - Max posts per page: 25 / 50 / 100 / 250 / All
+
 - **Output Options**:
   - Copy to clipboard
   - Download as .md file
@@ -255,6 +261,7 @@ LLMFeeder/
 │   ├── styles.css             # Styling for the popup UI
 │   ├── content.js             # Content script that runs on web pages
 │   ├── reddit.js              # Reddit-specific extraction (post + comment tree)
+│   ├── x.js                   # X (Twitter) extraction (thread + replies, timelines)
 │   ├── motion.js              # Spring + gesture runtime for the UI
 │   └── background.js          # Background script for keyboard shortcuts
 │
@@ -274,6 +281,7 @@ LLMFeeder/
 - **popup.html/js/css**: Creates the user interface when you click the extension icon
 - **content.js**: Contains the core functionality to extract and convert web content to Markdown
 - **reddit.js**: Renders Reddit threads and listings from Reddit's own JSON (with a DOM fallback) so comments survive the conversion
+- **x.js**: Renders X threads and timelines from the page itself, scrolling the virtualised list and reading post metadata from schema.org microdata (signed-out view) or the app's `data-testid` markup (signed-in view)
 - **motion.js**: Springs, pointer-gesture tracking, momentum projection and press feedback shared by the popup and the in-page notification
 - **background.js**: Handles keyboard shortcuts and global extension functionality
 - **readability.js**: Mozilla's library that identifies and extracts the main content from a webpage

@@ -45,6 +45,7 @@
         "libs/turndown.js",
         "motion.js",
         "reddit.js",
+        "x.js",
         "content.js"
       ]
     }

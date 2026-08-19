@@ -26,7 +26,15 @@ const SettingsUtils = (function() {
       // Comment sort passed to Reddit ('confidence' is what the UI calls "Best")
       redditCommentSort: 'confidence',
       // Comment ceiling per thread; 'all' means no cap.
-      redditMaxComments: 250
+      redditMaxComments: 250,
+      // X-aware extraction: renders the thread (post + replies) or the timeline
+      // by walking the virtualised list instead of the first visible post only.
+      xMode: true,
+      // Post ceiling per page (thread replies or timeline entries); 'all' means
+      // no cap, bounded only by the extractor's own time budget.
+      xMaxPosts: 100,
+      // Whether a thread capture includes the replies under the focused post.
+      xIncludeReplies: true
     });
   }
 

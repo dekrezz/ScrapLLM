@@ -39,6 +39,7 @@ git push origin feature/your-feature-name
 **Key Files for Feature Development:**
 - `extension/content.js` - Core conversion logic (main content extraction, markdown)
 - `extension/reddit.js` - Reddit thread/listing extraction (post + comment tree)
+- `extension/x.js` - X (Twitter) thread/timeline extraction (post + replies)
 - `extension/motion.js` - Spring + gesture runtime shared by popup and content script
 - `extension/popup.js` - Popup UI and settings handling
 - `extension/popup.html` - UI structure
@@ -67,6 +68,7 @@ LLMFeeder/
 │   ├── styles.css            # Popup styling
 │   ├── content.js            # Content script (42KB) - CORE LOGIC
 │   ├── reddit.js             # Reddit extractor (JSON API + DOM fallback)
+│   ├── x.js                  # X (Twitter) extractor (microdata + DOM, scroll collection)
 │   ├── motion.js             # Springs, gesture tracking, press feedback
 │   └── background.js         # Background script for keyboard shortcuts
 │
@@ -105,6 +107,7 @@ Edit files in the `extension/` directory based on your feature:
 | New settings | `popup.js` (add to loadSettings/saveSettings) |
 | Content extraction logic | `content.js` |
 | Reddit post/comment output | `reddit.js` |
+| X (Twitter) thread/timeline output | `x.js` |
 | Motion, gestures, press feedback | `motion.js` |
 | Keyboard shortcuts | `background.js`, `manifest.json` |
 | Permissions | `manifest.json` |
@@ -204,6 +207,37 @@ Reddit-specific message rather than silently degrading.
 
 Relevant settings: `redditMode` (default on), `redditCommentSort`
 (`confidence` = Best), `redditMaxComments` (number or `'all'`).
+
+### X (Twitter) Extractor (`x.js`)
+
+`convertToMarkdown()` hands x.com / twitter.com URLs to `LLMFeederX.convert()`
+right after the Reddit hook. X virtualises its timelines, so Readability sees at
+most the first visible post.
+
+| Function | Purpose |
+|----------|---------|
+| `getPageType(location)` | `'post'`, `'listing'`, or `null` (null = generic pipeline) |
+| `convert(settings, deps)` | Entry point; returns `{ markdown, articleData }` or `null` |
+| `collectPosts(limit, budget)` | Scrolls the virtualised list, deduplicating by post id |
+| `renderThread(...)` | Root post + self-thread continuation + replies |
+| `renderListing(...)` | Numbered index of a profile, feed, search or list timeline |
+
+X exposes no guest-readable JSON API, so the DOM is the only source. Two layouts
+are read through the same per-field getters: the signed-out server-rendered page
+carries schema.org microdata (`article[data-tweet-id]`, `meta[itemprop=...]`)
+for ids, dates, author and engagement counts, and the signed-in React app is
+covered by its `data-testid` hooks (`tweet`, `tweetText`, `User-Name`,
+`tweetPhoto`), `time[datetime]` and the `div[role="group"]` aria-label counts.
+Fields that neither layout exposes stay empty rather than failing the
+conversion, and a route with no readable post returns `null` so the generic
+pipeline takes over.
+
+Because collection scrolls, `content.js` grants X pages the same
+`SCROLL_TIMEOUT_HEADROOM` it grants the lazy-loading pass; the extractor keeps
+its own `COLLECT_TIME_BUDGET` below that headroom.
+
+Relevant settings: `xMode` (default on), `xMaxPosts` (number or `'all'`),
+`xIncludeReplies` (default on).
 
 ### Popup Script (`popup.js`) - Key Functions
 
@@ -552,6 +586,9 @@ git push origin v2.2.1
 | `redditMode` | boolean | true | Use the Reddit extractor on reddit.com |
 | `redditCommentSort` | string | "confidence" | Reddit comment sort (`confidence`, `top`, `new`, `controversial`, `old`, `qa`) |
 | `redditMaxComments` | number\|string | 250 | Comment ceiling per thread; `"all"` for no cap |
+| `xMode` | boolean | true | Use the X extractor on x.com / twitter.com |
+| `xMaxPosts` | number\|string | 100 | Post ceiling per page (replies or timeline entries); `"all"` for no cap |
+| `xIncludeReplies` | boolean | true | Include replies when capturing an X thread |
 
 ### Metadata Template Variables
 

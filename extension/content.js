@@ -132,7 +132,13 @@
       // scroll-to-load pass, since that step alone can take up to
       // SCROLL_TIMEOUT_HEADROOM ms before extraction even begins.
       const requestSettings = request.settings || request.options || {};
-      const conversionTimeout = requestSettings.triggerLazyLoading === true
+      // X timelines are virtualised, so the X extractor has to scroll to collect
+      // posts and needs the same headroom even when lazy-loading is off.
+      const needsScrollHeadroom = requestSettings.triggerLazyLoading === true ||
+        (requestSettings.xMode !== false &&
+         typeof LLMFeederX !== 'undefined' &&
+         LLMFeederX.isXPage(window.location));
+      const conversionTimeout = needsScrollHeadroom
         ? CONVERSION_TIMEOUT + SCROLL_TIMEOUT_HEADROOM
         : CONVERSION_TIMEOUT;
       const timeoutId = setTimeout(() => {
@@ -546,7 +552,8 @@
       includeTitle: settings.includeTitle,
       includeLinks: settings.includeLinks,
       triggerLazyLoading: settings.triggerLazyLoading === true,
-      redditMode: settings.redditMode !== false
+      redditMode: settings.redditMode !== false,
+      xMode: settings.xMode !== false
     });
 
     // Reddit pages: Readability keeps the post body but drops the comment tree
@@ -574,6 +581,32 @@
       // (empty feed, profile with no activity); fall through to the generic
       // extraction below.
       DebugLog.log('Reddit extractor returned no content; using generic extraction');
+    }
+
+    // X (Twitter) pages: the timeline is virtualised and Readability keeps at
+    // most the first visible post, so threads and timelines go through the
+    // dedicated X extractor instead.
+    if (settings.xMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof LLMFeederX !== 'undefined' &&
+        LLMFeederX.isXPage(window.location)) {
+      const xPageType = LLMFeederX.getPageType(window.location);
+      DebugLog.log('X page detected', { pageType: xPageType });
+      const x = await LLMFeederX.convert(settings, {
+        logger: {
+          log: (message, data) => DebugLog.log(message, data),
+          error: (message, error) => DebugLog.error(message, error)
+        },
+        createTurndown: () => configureTurndownService(settings)
+      });
+      if (x) {
+        // The X renderer already emits its own H1 title, so includeTitle is
+        // intentionally not applied a second time here.
+        return postProcessMarkdown(x.markdown, settings, x.articleData);
+      }
+      // convert() returns null for X routes with nothing to render (login
+      // wall, empty timeline); fall through to the generic extraction below.
+      DebugLog.log('X extractor returned no content; using generic extraction');
     }
 
     // Detect and handle lazy-loaded content before extraction.

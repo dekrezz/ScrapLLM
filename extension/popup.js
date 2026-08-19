@@ -141,6 +141,9 @@ const triggerLazyLoadingCheckbox = document.getElementById("triggerLazyLoading")
 const redditModeCheckbox = document.getElementById("redditMode");
 const redditCommentSortSelect = document.getElementById("redditCommentSort");
 const redditMaxCommentsSelect = document.getElementById("redditMaxComments");
+const xModeCheckbox = document.getElementById("xMode");
+const xIncludeRepliesCheckbox = document.getElementById("xIncludeReplies");
+const xMaxPostsSelect = document.getElementById("xMaxPosts");
 
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
@@ -450,6 +453,9 @@ async function loadSettings() {
     redditModeCheckbox.checked = data.redditMode !== false;
     redditCommentSortSelect.value = data.redditCommentSort;
     redditMaxCommentsSelect.value = String(data.redditMaxComments);
+    xModeCheckbox.checked = data.xMode !== false;
+    xIncludeRepliesCheckbox.checked = data.xIncludeReplies !== false;
+    xMaxPostsSelect.value = String(data.xMaxPosts);
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
 
     // Show/hide metadata format container based on checkbox state
@@ -479,6 +485,9 @@ async function saveSettings() {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const xMode = xModeCheckbox.checked;
+    const xIncludeReplies = xIncludeRepliesCheckbox.checked;
+    const xMaxPosts = xMaxPostsSelect.value;
     const showTokenCount = showTokenCountCheckbox.checked;
     const tokenContextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
 
@@ -495,6 +504,9 @@ async function saveSettings() {
       redditMode,
       redditCommentSort,
       redditMaxComments,
+      xMode,
+      xIncludeReplies,
+      xMaxPosts,
       showTokenCount,
       tokenContextLimit,
     });
@@ -815,6 +827,9 @@ function getCurrentSettings() {
     redditMode: redditModeCheckbox.checked,
     redditCommentSort: redditCommentSortSelect.value,
     redditMaxComments: redditMaxCommentsSelect.value,
+    xMode: xModeCheckbox.checked,
+    xIncludeReplies: xIncludeRepliesCheckbox.checked,
+    xMaxPosts: xMaxPostsSelect.value,
   };
 }
 
@@ -937,6 +952,9 @@ async function convertToMarkdown(scopeOverride) {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const xMode = xModeCheckbox.checked;
+    const xIncludeReplies = xIncludeRepliesCheckbox.checked;
+    const xMaxPosts = xMaxPostsSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -954,6 +972,9 @@ async function convertToMarkdown(scopeOverride) {
         redditMode,
         redditCommentSort,
         redditMaxComments,
+        xMode,
+        xIncludeReplies,
+        xMaxPosts,
       },
     });
 
@@ -1029,6 +1050,9 @@ async function downloadMarkdown() {
     const redditMode = redditModeCheckbox.checked;
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
+    const xMode = xModeCheckbox.checked;
+    const xIncludeReplies = xIncludeRepliesCheckbox.checked;
+    const xMaxPosts = xMaxPostsSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -1046,6 +1070,9 @@ async function downloadMarkdown() {
         redditMode,
         redditCommentSort,
         redditMaxComments,
+        xMode,
+        xIncludeReplies,
+        xMaxPosts,
       },
     });
 
@@ -1265,6 +1292,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   redditModeCheckbox.addEventListener("change", saveSettings);
   redditCommentSortSelect.addEventListener("change", saveSettings);
   redditMaxCommentsSelect.addEventListener("change", saveSettings);
+  xModeCheckbox.addEventListener("change", saveSettings);
+  xIncludeRepliesCheckbox.addEventListener("change", saveSettings);
+  xMaxPostsSelect.addEventListener("change", saveSettings);
 
   // Metadata format settings
   includeMetadataCheckbox.addEventListener("change", () => {
