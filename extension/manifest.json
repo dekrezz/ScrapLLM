@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "LLMFeeder - Web to Markdown for AI",
+  "version": "2.2.1",
+  "description": "Convert any webpage to clean Markdown for ChatGPT, Claude & Gemini. Multi-tab copy, token counter. 100% private.",
+  "author": "@jatinkrmalik",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "llmfeeder@j47.in",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "clipboardWrite",
+    "storage",
+    "scripting",
+    "contextMenus",
+    "menus"
+  ],
+  "host_permissions": [
+    "https://tiktoken.pages.dev/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "libs/readability.js",
+        "libs/turndown.js",
+        "content.js"
+      ]
+    }
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+L",
+        "mac": "Alt+Shift+L"
+      },
+      "description": "Open LLMFeeder"
+    },
+    "convert_to_markdown": {
+      "suggested_key": {
+        "default": "Alt+Shift+M",
+        "mac": "Alt+Shift+M"
+      },
+      "description": "Copy page as Markdown for ChatGPT & Claude"
+    },
+    "download_markdown": {
+      "suggested_key": {
+        "default": "Alt+Shift+D",
+        "mac": "Alt+Shift+D"
+      },
+      "description": "Download page as Markdown"
+    },
+    "download_zip": {
+      "suggested_key": {
+        "default": "Alt+Shift+Z",
+        "mac": "Alt+Shift+Z"
+      },
+      "description": "Download multiple tabs as ZIP"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

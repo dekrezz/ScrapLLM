@@ -1,0 +1,50 @@
+name: 🐛 Report a bug
+description: Use this template when reporting bugs or unexpected behavior in LLMFeeder.
+labels: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        # Thanks for reporting a bug! 🐛
+
+        Help us replicate the issue by filling in this form.
+
+
+        ## Please ensure:
+
+        ✅ The bug is caused by LLMFeeder. It doesn't happen if I disable the extension.
+        ✅ You have cleared your browser cache and tried again.
+        ✅ You have tested in incognito/private mode.
+
+        
+        ## Please try to include:
+
+        - Screenshots/video/gif demonstrating the bug, if it's visual bug.
+        - Console errors, if any (just paste them here in a `codeblock`).
+
+  - id: description
+    type: textarea
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - id: repro
+    type: textarea
+    attributes:
+      label: Steps to reproduce the issue?
+      description: Please include detailed steps to reproduce the bug. It would be great if you can attach a screen recording or screenshots.
+    validations:
+      required: true
+  - id: version
+    type: input
+    attributes:
+      label: Extension version
+    validations:
+      required: false
+  - id: browser
+    type: input
+    attributes:
+      label: Browser(s) used
+      description: Chrome / Firefox / Other
+    validations:
+      required: true
