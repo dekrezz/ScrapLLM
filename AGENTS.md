@@ -594,12 +594,10 @@ git push origin v2.2.1
 2. **Commit Messages**: Use conventional commits (`feat:`, `fix:`, `docs:`, etc.)
 3. **Testing**: Always test with `testbench.html` before submitting
 4. **Debug Logs**: Include debug logs when reporting issues
-5. **Co-Authored-By**: Add when collaborating with AI agents
+5. **Attribution**: Commits carry no AI co-author trailers or generated-by footers
 
 ```
 feat: add new feature description
-
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 ```
 
 ---
