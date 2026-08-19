@@ -1,5 +1,5 @@
 name: 🐛 Report a bug
-description: Use this template when reporting bugs or unexpected behavior in LLMFeeder.
+description: Use this template when reporting bugs or unexpected behavior in ScrapLLM.
 labels: bug
 body:
   - type: markdown
@@ -12,7 +12,7 @@ body:
 
         ## Please ensure:
 
-        ✅ The bug is caused by LLMFeeder. It doesn't happen if I disable the extension.
+        ✅ The bug is caused by ScrapLLM. It doesn't happen if I disable the extension.
         ✅ You have cleared your browser cache and tried again.
         ✅ You have tested in incognito/private mode.
 

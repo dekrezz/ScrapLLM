@@ -72,7 +72,7 @@ describe('TokenCounter', () => {
     it('uses the encoding cached in chrome.storage without fetching', async () => {
       global.fetch = jest.fn();
       jest.spyOn(chrome.storage.local, 'get').mockResolvedValue({
-        llmfeeder_encoding_cache: {
+        scrapllm_encoding_cache: {
           version: '1',
           cl100k_base: emptyEncoding
         }
@@ -91,7 +91,7 @@ describe('TokenCounter', () => {
       await TokenCounter.count('hi');
 
       expect(setSpy).toHaveBeenCalledWith({
-        llmfeeder_encoding_cache: expect.objectContaining({
+        scrapllm_encoding_cache: expect.objectContaining({
           version: '1',
           cl100k_base: emptyEncoding
         })
@@ -194,7 +194,7 @@ describe('TokenCounter', () => {
       await TokenCounter.clearCache();
 
       expect(TokenCounter.getStatus().isReady).toBe(false);
-      expect(removeSpy).toHaveBeenCalledWith('llmfeeder_encoding_cache');
+      expect(removeSpy).toHaveBeenCalledWith('scrapllm_encoding_cache');
     });
   });
 });

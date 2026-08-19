@@ -1,4 +1,4 @@
-// LLMFeeder X (Twitter) Extractor
+// ScrapLLM X (Twitter) Extractor
 // Renders X threads (post + replies) and listings (profile, feed, search) as
 // structured Markdown.
 //
@@ -21,7 +21,7 @@
 // Every getter therefore reads "best available source first" rather than
 // assuming one layout, and `convert()` returns null when a route holds no
 // readable post so the caller can fall back to the generic pipeline.
-const LLMFeederX = (function () {
+const ScrapLLMX = (function () {
   'use strict';
 
   // /<handle>/status/<id> (also the legacy /statuses/ form)
@@ -681,9 +681,9 @@ const LLMFeederX = (function () {
 })();
 
 if (typeof window !== 'undefined') {
-  window.LLMFeederX = LLMFeederX;
+  window.ScrapLLMX = ScrapLLMX;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = LLMFeederX;
+  module.exports = ScrapLLMX;
 }

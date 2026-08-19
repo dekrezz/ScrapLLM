@@ -51,10 +51,10 @@ logs/
 temp-chrome-build/
 temp-firefox-build/
 .tmp-build/
-LLMFeeder-Chrome-*.zip
-LLMFeeder-Firefox-*.zip
-LLMFeeder-Source-*.zip
-LLMFeeder-v*.zip
+ScrapLLM-Chrome-*.zip
+ScrapLLM-Firefox-*.zip
+ScrapLLM-Source-*.zip
+ScrapLLM-v*.zip
 
 # IDE files
 .vscode/

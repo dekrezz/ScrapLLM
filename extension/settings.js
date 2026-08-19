@@ -1,4 +1,4 @@
-// LLMFeeder Settings Utilities
+// ScrapLLM Settings Utilities
 // Shared settings constants and functions used across popup and background scripts
 
 const SettingsUtils = (function() {

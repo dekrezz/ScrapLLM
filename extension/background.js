@@ -1,4 +1,4 @@
-// LLMFeeder Background Script
+// ScrapLLM Background Script
 // Handles keyboard shortcuts and background tasks
 // Dependencies: libs/jszip.min.js, settings.js, and multi-tab-utils.js
 // (loaded via manifest in Firefox, or importScripts in Chrome service worker)
@@ -150,12 +150,12 @@ async function ensureContentScriptLoaded(tabId) {
 
 // Context Menu Management
 const CONTEXT_MENU_IDS = {
-  PARENT: 'llmfeeder-parent',
-  SINGLE_COPY: 'llmfeeder-single-copy',
-  SINGLE_DOWNLOAD: 'llmfeeder-single-download',
-  MULTI_COPY: 'llmfeeder-multi-copy',
-  MULTI_DOWNLOAD: 'llmfeeder-multi-download',
-  MULTI_ZIP: 'llmfeeder-multi-zip'
+  PARENT: 'scrapllm-parent',
+  SINGLE_COPY: 'scrapllm-single-copy',
+  SINGLE_DOWNLOAD: 'scrapllm-single-download',
+  MULTI_COPY: 'scrapllm-multi-copy',
+  MULTI_DOWNLOAD: 'scrapllm-multi-download',
+  MULTI_ZIP: 'scrapllm-multi-zip'
 };
 
 // Current menu state
@@ -424,7 +424,7 @@ async function handleMultiTabCommand(command, tabs) {
     } else if (command === "download_markdown") {
       // Download Merged: Single .md file
       const merged = MultiTabUtils.mergeMarkdownResults(results);
-      const filename = `llmfeeder-merged-${MultiTabUtils.getDateString()}.md`;
+      const filename = `scrapllm-merged-${MultiTabUtils.getDateString()}.md`;
 
       // Trigger download via active tab
       const activeTabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
@@ -535,7 +535,7 @@ async function handleKeyboardShortcut(command) {
 
           if (command === "download_markdown") {
             // Download as file
-            const pageTitle = activeTab.title || "llmfeeder";
+            const pageTitle = activeTab.title || "scrapllm";
             await browserAPI.tabs.sendMessage(activeTab.id, {
               action: "downloadMarkdown",
               markdown: response.markdown,

@@ -36,15 +36,15 @@ jobs:
       run: |
         echo "Checking build artifacts..."
         VERSION=$(jq -r '.version' extension/manifest.json)
-        if [ ! -f "dist/LLMFeeder-Chrome-v${VERSION}.zip" ]; then
+        if [ ! -f "dist/ScrapLLM-Chrome-v${VERSION}.zip" ]; then
           echo "::error::Chrome build artifact not found"
           exit 1
         fi
-        if [ ! -f "dist/LLMFeeder-Firefox-v${VERSION}.zip" ]; then
+        if [ ! -f "dist/ScrapLLM-Firefox-v${VERSION}.zip" ]; then
           echo "::error::Firefox build artifact not found"
           exit 1
         fi
-        if [ ! -f "dist/LLMFeeder-Source-v${VERSION}.zip" ]; then
+        if [ ! -f "dist/ScrapLLM-Source-v${VERSION}.zip" ]; then
           echo "::error::Source build artifact not found"
           exit 1
         fi
@@ -55,7 +55,7 @@ jobs:
         echo "Validating Chrome manifest.json..."
         VERSION=$(jq -r '.version' extension/manifest.json)
         mkdir -p /tmp/chrome-extract
-        unzip -q -o "dist/LLMFeeder-Chrome-v${VERSION}.zip" manifest.json -d /tmp/chrome-extract
+        unzip -q -o "dist/ScrapLLM-Chrome-v${VERSION}.zip" manifest.json -d /tmp/chrome-extract
         jq empty /tmp/chrome-extract/manifest.json
         echo "Chrome manifest.json is valid JSON"
 
@@ -64,7 +64,7 @@ jobs:
         echo "Validating Firefox manifest.json..."
         VERSION=$(jq -r '.version' extension/manifest.json)
         mkdir -p /tmp/firefox-extract
-        unzip -q -o "dist/LLMFeeder-Firefox-v${VERSION}.zip" manifest.json -d /tmp/firefox-extract
+        unzip -q -o "dist/ScrapLLM-Firefox-v${VERSION}.zip" manifest.json -d /tmp/firefox-extract
         jq empty /tmp/firefox-extract/manifest.json
         echo "Firefox manifest.json is valid JSON"
 

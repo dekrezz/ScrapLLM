@@ -1,6 +1,4 @@
-// LLMFeeder Popup Script
-// Created by @jatinkrmalik (https://github.com/jatinkrmalik)
-
+// ScrapLLM Popup Script
 const MAX_FILENAME_LENGTH = 100;
 
 // Create a proper browserAPI wrapper for the popup
@@ -120,7 +118,7 @@ const popupShortcut = document.getElementById("popupShortcut");
 const quickConvertShortcut = document.getElementById("quickConvertShortcut");
 const downloadShortcut = document.getElementById("downloadShortcut");
 
-const THEME_KEY = "llmfeeder-theme";
+const THEME_KEY = "scrapllm-theme";
 const THEMES = { DARK: "dark", LIGHT: "light" };
 
 // Get all settings elements
@@ -170,7 +168,7 @@ const DEFAULT_TOKEN_SETTINGS = {
 // afterwards, so a half-open panel can be grabbed, reversed or thrown at any
 // moment without waiting for anything to finish.
 
-const Motion = window.LLMFeederMotion;
+const Motion = window.ScrapLLMMotion;
 const NAV_EDGE_DIM = 400; // popup width in px; the travel distance of the pan
 
 const navSpring = new Motion.Spring(0, {
@@ -762,7 +760,7 @@ async function copyAllTabs() {
 async function downloadMergedFile() {
   await processMultiTabAction(async (results) => {
     const merged = MultiTabUtils.mergeMarkdownResults(results);
-    const filename = `llmfeeder-merged-${MultiTabUtils.getDateString()}`;
+    const filename = `scrapllm-merged-${MultiTabUtils.getDateString()}`;
     downloadMarkdownFile(filename, merged);
     return { suffix: " downloaded" };
   });
@@ -1210,7 +1208,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 async function generateFileNameFromPageTitle() {
-  let baseFilename = "llmfeeder"; // Default filename
+  let baseFilename = "scrapllm"; // Default filename
   try {
     const tabs = await browserAPI.tabs.query({
       active: true,

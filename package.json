@@ -1,5 +1,5 @@
 {
-  "name": "llmfeeder",
+  "name": "scrapllm",
   "version": "2.2.1",
   "description": "Convert any webpage to clean Markdown for ChatGPT, Claude & Gemini. Multi-tab copy, token counter. 100% private.",
   "private": true,

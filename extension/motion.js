@@ -1,4 +1,4 @@
-// LLMFeeder Motion
+// ScrapLLM Motion
 // A tiny spring/gesture runtime shared by the popup and the in-page notification.
 //
 // Why not CSS transitions: anything the user can touch must be interruptible and
@@ -9,7 +9,7 @@
 // Parameters follow Apple's designer-facing pair rather than mass/stiffness/
 // damping: `response` (seconds to approach the target) and `damping` (1 =
 // critically damped, no overshoot; < 1 bounces).
-const LLMFeederMotion = (function () {
+const ScrapLLMMotion = (function () {
   'use strict';
 
   const REST_DISPLACEMENT = 0.01;
@@ -355,9 +355,9 @@ const LLMFeederMotion = (function () {
 })();
 
 if (typeof window !== 'undefined') {
-  window.LLMFeederMotion = LLMFeederMotion;
+  window.ScrapLLMMotion = ScrapLLMMotion;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = LLMFeederMotion;
+  module.exports = ScrapLLMMotion;
 }

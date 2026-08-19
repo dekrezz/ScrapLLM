@@ -1,5 +1,4 @@
-// LLMFeeder Content Script
-// Created by @jatinkrmalik (https://github.com/jatinkrmalik)
+// ScrapLLM Content Script
 (function() {
   'use strict';
 
@@ -113,8 +112,8 @@
     // worth offering a dedicated button for.
     if (request.action === 'getSelectionInfo') {
       try {
-        const info = typeof LLMFeederSelection !== 'undefined'
-          ? LLMFeederSelection.inspect()
+        const info = typeof ScrapLLMSelection !== 'undefined'
+          ? ScrapLLMSelection.inspect()
           : { hasSelection: false };
         sendResponse({ success: true, info });
       } catch (error) {
@@ -126,8 +125,8 @@
     // Chat probe: does this page hold an LLM conversation?
     if (request.action === 'getChatInfo') {
       try {
-        const info = typeof LLMFeederChat !== 'undefined'
-          ? LLMFeederChat.inspect()
+        const info = typeof ScrapLLMChat !== 'undefined'
+          ? ScrapLLMChat.inspect()
           : { isChat: false };
         sendResponse({ success: true, info });
       } catch (error) {
@@ -163,8 +162,8 @@
       // posts and needs the same headroom even when lazy-loading is off.
       const needsScrollHeadroom = requestSettings.triggerLazyLoading === true ||
         (requestSettings.xMode !== false &&
-         typeof LLMFeederX !== 'undefined' &&
-         LLMFeederX.isXPage(window.location));
+         typeof ScrapLLMX !== 'undefined' &&
+         ScrapLLMX.isXPage(window.location));
       const conversionTimeout = needsScrollHeadroom
         ? CONVERSION_TIMEOUT + SCROLL_TIMEOUT_HEADROOM
         : CONVERSION_TIMEOUT;
@@ -270,7 +269,7 @@
     if (filename.length > MAX_FILENAME_LENGTH) {
       filename = filename.substring(0, MAX_FILENAME_LENGTH).replace(/_+$/g, '');
     }
-    if (!filename) filename = 'llmfeeder';
+    if (!filename) filename = 'scrapllm';
     
     const blob = new Blob([markdown], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -588,11 +587,11 @@
     // threads and listings go through the dedicated Reddit extractor instead.
     if (settings.redditMode !== false &&
         settings.contentScope !== 'selection' &&
-        typeof LLMFeederReddit !== 'undefined' &&
-        LLMFeederReddit.isRedditPage(window.location)) {
-      const redditPageType = LLMFeederReddit.getPageType(window.location);
+        typeof ScrapLLMReddit !== 'undefined' &&
+        ScrapLLMReddit.isRedditPage(window.location)) {
+      const redditPageType = ScrapLLMReddit.getPageType(window.location);
       DebugLog.log('Reddit page detected', { pageType: redditPageType });
-      const reddit = await LLMFeederReddit.convert(settings, {
+      const reddit = await ScrapLLMReddit.convert(settings, {
         logger: {
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
@@ -615,11 +614,11 @@
     // dedicated X extractor instead.
     if (settings.xMode !== false &&
         settings.contentScope !== 'selection' &&
-        typeof LLMFeederX !== 'undefined' &&
-        LLMFeederX.isXPage(window.location)) {
-      const xPageType = LLMFeederX.getPageType(window.location);
+        typeof ScrapLLMX !== 'undefined' &&
+        ScrapLLMX.isXPage(window.location)) {
+      const xPageType = ScrapLLMX.getPageType(window.location);
       DebugLog.log('X page detected', { pageType: xPageType });
-      const x = await LLMFeederX.convert(settings, {
+      const x = await ScrapLLMX.convert(settings, {
         logger: {
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
@@ -668,8 +667,8 @@
 
     // Conversations are their own scope: the transcript lives behind the site's
     // API or in a virtualised list, and Readability sees neither.
-    if (settings.contentScope === 'chat' && typeof LLMFeederChat !== 'undefined') {
-      const chat = await LLMFeederChat.convert(settings, {
+    if (settings.contentScope === 'chat' && typeof ScrapLLMChat !== 'undefined') {
+      const chat = await ScrapLLMChat.convert(settings, {
         logger: {
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
@@ -684,8 +683,8 @@
 
     // A highlighted fragment is an excerpt, not a page: it gets a source line,
     // a line range and a code fence when the fragment is code.
-    if (settings.contentScope === 'selection' && typeof LLMFeederSelection !== 'undefined') {
-      const excerpt = LLMFeederSelection.convert(settings, {
+    if (settings.contentScope === 'selection' && typeof ScrapLLMSelection !== 'undefined') {
+      const excerpt = ScrapLLMSelection.convert(settings, {
         logger: {
           log: (message, data) => DebugLog.log(message, data),
           error: (message, error) => DebugLog.error(message, error)
@@ -972,7 +971,7 @@
 
   function createIframePlaceholder(iframeSrc, iframeTitle) {
     const linkDiv = document.createElement('div');
-    linkDiv.className = 'llmfeeder-iframe-link';
+    linkDiv.className = 'scrapllm-iframe-link';
     const p = document.createElement('p');
     p.appendChild(document.createTextNode('[Embedded content: '));
     const title = iframeTitle || 'Embedded content';
@@ -1025,7 +1024,7 @@
     }
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'llmfeeder-iframe-content';
+    wrapper.className = 'scrapllm-iframe-content';
     wrapper.setAttribute('data-iframe-src', iframeSrc);
     wrapper.setAttribute('data-iframe-index', String(index));
     while (clonedIframeContent.firstChild) {
@@ -1114,11 +1113,11 @@
       });
 
       const iframeSection = document.createElement('div');
-      iframeSection.className = 'llmfeeder-iframes';
+      iframeSection.className = 'scrapllm-iframes';
 
       extractedContents.forEach((wrapper, index) => {
         const section = document.createElement('div');
-        section.className = 'llmfeeder-iframe-section';
+        section.className = 'scrapllm-iframe-section';
         section.appendChild(document.createElement('hr'));
         const heading = document.createElement('h3');
         heading.textContent = `Embedded Content ${index + 1}`;
@@ -1156,7 +1155,7 @@
 
       if (extractedContent) {
         const replacementDiv = document.createElement('div');
-        replacementDiv.className = 'llmfeeder-iframe-replacement';
+        replacementDiv.className = 'scrapllm-iframe-replacement';
         while (extractedContent.firstChild) {
           replacementDiv.appendChild(extractedContent.firstChild);
         }
@@ -1399,7 +1398,7 @@
   // ==========================================================================
 
   function showNotification(title, message) {
-    const existingNotifications = document.querySelectorAll('.llmfeeder-notification');
+    const existingNotifications = document.querySelectorAll('.scrapllm-notification');
     existingNotifications.forEach(notification => {
       if (notification.parentNode) {
         notification.parentNode.removeChild(notification);
@@ -1407,7 +1406,7 @@
     });
 
     const notification = document.createElement('div');
-    notification.className = 'llmfeeder-notification';
+    notification.className = 'scrapllm-notification';
 
     // A translucent floating layer over unknown page content: a heavy dark
     // material with a strong blur (big surfaces read as thicker), an accent
@@ -1587,7 +1586,7 @@
   // the same axis it dismisses on, tracks the finger 1:1 when swiped, and
   // leaves at the velocity the finger let go with.
   function animateNotification(notification, closeButton) {
-    const Motion = typeof LLMFeederMotion !== 'undefined' ? LLMFeederMotion : null;
+    const Motion = typeof ScrapLLMMotion !== 'undefined' ? ScrapLLMMotion : null;
     const width = notification.getBoundingClientRect().width || 340;
     const OFFSCREEN = width + 40;
     let removed = false;

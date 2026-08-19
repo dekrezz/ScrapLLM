@@ -48,8 +48,8 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          dist/LLMFeeder-Chrome-${{ github.ref_name }}.zip
-          dist/LLMFeeder-Firefox-${{ github.ref_name }}.zip
-          dist/LLMFeeder-Source-${{ github.ref_name }}.zip
+          dist/ScrapLLM-Chrome-${{ github.ref_name }}.zip
+          dist/ScrapLLM-Firefox-${{ github.ref_name }}.zip
+          dist/ScrapLLM-Source-${{ github.ref_name }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

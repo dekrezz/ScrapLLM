@@ -1,4 +1,4 @@
-// LLMFeeder Multi-Tab Utilities
+// ScrapLLM Multi-Tab Utilities
 // Shared utilities for multi-tab processing in popup and background scripts
 
 const MultiTabUtils = (function() {
@@ -152,7 +152,7 @@ const MultiTabUtils = (function() {
     }
 
     const blob = await zip.generateAsync({ type: 'blob' });
-    const zipFilename = `llmfeeder-export-${getDateString()}-${successCount}tabs.zip`;
+    const zipFilename = `scrapllm-export-${getDateString()}-${successCount}tabs.zip`;
 
     return { blob, filename: zipFilename, successCount };
   }

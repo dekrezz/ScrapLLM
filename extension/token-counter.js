@@ -1,4 +1,4 @@
-// LLMFeeder Token Counter
+// ScrapLLM Token Counter
 // Client-side token counting using js-tiktoken
 // Dynamically loads encoding data from CDN to keep bundle size small
 
@@ -25,7 +25,7 @@ const TokenCounter = (function() {
   let tiktokenCore = null;
 
   // Storage key for caching
-  const STORAGE_KEY = 'llmfeeder_encoding_cache';
+  const STORAGE_KEY = 'scrapllm_encoding_cache';
   const STORAGE_VERSION = '1';
 
   /**

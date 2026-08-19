@@ -1,4 +1,4 @@
-// LLMFeeder Reddit Extractor
+// ScrapLLM Reddit Extractor
 // Renders Reddit threads (post + comment tree) and listings as structured Markdown.
 //
 // Primary source is Reddit's public JSON representation of the current page
@@ -9,7 +9,7 @@
 // When the JSON endpoint is unavailable (bot check, network error, unusual
 // route) we fall back to scraping the rendered DOM of either the current
 // (`shreddit-*` custom elements) or the old (`.thing`) interface.
-const LLMFeederReddit = (function () {
+const ScrapLLMReddit = (function () {
   'use strict';
 
   // Paths like /r/sub/comments/<id>/<slug>/, /comments/<id>, /user/x/comments/<id>
@@ -313,7 +313,7 @@ const LLMFeederReddit = (function () {
 
     const notes = [];
     if (state.limitReached) {
-      notes.push(`Only the first ${formatNumber(state.limit)} comments were included (limit set in LLMFeeder settings).`);
+      notes.push(`Only the first ${formatNumber(state.limit)} comments were included (limit set in ScrapLLM settings).`);
     }
     if (state.notLoaded > 0) {
       notes.push(`${formatNumber(state.notLoaded)} further replies were collapsed by Reddit and not loaded.`);
@@ -665,7 +665,7 @@ const LLMFeederReddit = (function () {
 
     throw new Error(
       `Reddit extraction failed (${jsonError ? jsonError.message : 'no data'}). ` +
-      'Reload the page while logged in, or turn off Reddit mode in LLMFeeder settings to use the generic extractor.'
+      'Reload the page while logged in, or turn off Reddit mode in ScrapLLM settings to use the generic extractor.'
     );
   }
 
@@ -688,9 +688,9 @@ const LLMFeederReddit = (function () {
 })();
 
 if (typeof window !== 'undefined') {
-  window.LLMFeederReddit = LLMFeederReddit;
+  window.ScrapLLMReddit = ScrapLLMReddit;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = LLMFeederReddit;
+  module.exports = ScrapLLMReddit;
 }

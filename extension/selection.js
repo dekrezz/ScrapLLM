@@ -1,4 +1,4 @@
-// LLMFeeder Selection
+// ScrapLLM Selection
 // Turns a highlighted fragment into a citable excerpt: where it came from,
 // which lines it covers, and whether it is prose or code.
 //
@@ -6,7 +6,7 @@
 // That loses the two things that make a pasted fragment usable as LLM context:
 // the source it belongs to, and the fact that a block of code is code (an
 // unfenced snippet gets re-flowed and mangled by every model that reads it).
-const LLMFeederSelection = (function () {
+const ScrapLLMSelection = (function () {
   'use strict';
 
   // Elements that mean "this is a code region" regardless of what the text
@@ -314,9 +314,9 @@ const LLMFeederSelection = (function () {
 })();
 
 if (typeof window !== 'undefined') {
-  window.LLMFeederSelection = LLMFeederSelection;
+  window.ScrapLLMSelection = ScrapLLMSelection;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = LLMFeederSelection;
+  module.exports = ScrapLLMSelection;
 }

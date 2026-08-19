@@ -11,7 +11,7 @@ describe('content script page isolation', () => {
 
   it('does not register a window message listener', () => {
     expect(source).not.toMatch(/addEventListener\(\s*['"]message['"]/);
-    expect(source).not.toMatch(/llmfeeder_extract_content/);
+    expect(source).not.toMatch(/scrapllm_extract_content/);
     expect(source).not.toMatch(/event\.source\.postMessage/);
   });
 
@@ -23,7 +23,7 @@ describe('content script page isolation', () => {
     require(CONTENT_SCRIPT);
 
     const onMessage = (event) => {
-      if (event.data && event.data.action === 'llmfeeder_extract_content_response') {
+      if (event.data && event.data.action === 'scrapllm_extract_content_response') {
         window.removeEventListener('message', onMessage);
         done(new Error('content script should not reply to unsolicited page messages'));
       }
@@ -31,7 +31,7 @@ describe('content script page isolation', () => {
 
     window.addEventListener('message', onMessage);
     window.postMessage({
-      action: 'llmfeeder_extract_content',
+      action: 'scrapllm_extract_content',
       messageId: 'isolation-check'
     }, '*');
 

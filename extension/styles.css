@@ -1,5 +1,5 @@
-/* LLMFeeder Styles
- * Created by @jatinkrmalik (https://github.com/jatinkrmalik)
+/* ScrapLLM Styles
+ * Created by @dekrezz (https://github.com/dekrezz)
  *
  * Design notes (see AGENTS.md → "Interface design"):
  * - Motion the user can touch lives in motion.js (springs), never in CSS
@@ -826,10 +826,10 @@ a.icon-btn {
 .status.processing::before {
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 3a9 9 0 1 0 9 9'/%3E%3C/svg%3E");
-  animation: llmfeeder-spin 900ms linear infinite;
+  animation: scrapllm-spin 900ms linear infinite;
 }
 
-@keyframes llmfeeder-spin {
+@keyframes scrapllm-spin {
   to { transform: rotate(360deg); }
 }
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>LLMFeeder Iframe Test Page</title>
+    <title>ScrapLLM Iframe Test Page</title>
     <style>
         body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 20px; }
         h1 { color: #333; }
@@ -17,13 +17,13 @@
     </style>
 </head>
 <body>
-    <h1>LLMFeeder Iframe Extraction Test Page</h1>
+    <h1>ScrapLLM Iframe Extraction Test Page</h1>
 
     <div class="instructions">
         <h3>Testing Instructions:</h3>
         <ol>
-            <li>Reload the LLMFeeder extension</li>
-            <li>Open LLMFeeder popup (click the extension icon)</li>
+            <li>Reload the ScrapLLM extension</li>
+            <li>Open ScrapLLM popup (click the extension icon)</li>
             <li><strong>Enable "Debug Mode" in options</strong> (gear icon)</li>
             <li>Set <strong>Content Scope to "Full Page"</strong></li>
             <li>Click "Copy to Clipboard"</li>
@@ -34,7 +34,7 @@
 
     <div class="test-section">
         <h2>Test 1: Main Content</h2>
-        <p>This content should be extracted by LLMFeeder. It's a simple article with some text.</p>
+        <p>This content should be extracted by ScrapLLM. It's a simple article with some text.</p>
         <ul>
             <li>Item 1: The main content is easily accessible</li>
             <li>Item 2: Iframes require special handling</li>
@@ -47,7 +47,7 @@
         <h2>Test 2: Same-Origin Iframe (srcdoc)</h2>
         <p>This iframe uses the <code>srcdoc</code> attribute, which is considered same-origin.</p>
         <iframe
-            srcdoc="<html><head><style>body{font-family:sans-serif;padding:20px;background:#e3f2fd}h2{color:#1976d2}</style></head><body><h2>srcdoc Iframe Content</h2><p><strong>This content SHOULD be extracted by LLMFeeder!</strong></p><p>This is same-origin content loaded via the srcdoc attribute, which bypasses normal iframe loading restrictions.</p><ul><li>Extracted via direct DOM access</li><li>Same-origin via srcdoc attribute</li><li>Should work with Full Page scope</li></ul></body></html>"
+            srcdoc="<html><head><style>body{font-family:sans-serif;padding:20px;background:#e3f2fd}h2{color:#1976d2}</style></head><body><h2>srcdoc Iframe Content</h2><p><strong>This content SHOULD be extracted by ScrapLLM!</strong></p><p>This is same-origin content loaded via the srcdoc attribute, which bypasses normal iframe loading restrictions.</p><ul><li>Extracted via direct DOM access</li><li>Same-origin via srcdoc attribute</li><li>Should work with Full Page scope</li></ul></body></html>"
             title="srcdoc Iframe"></iframe>
         <div class="expected"><span class="success">Expected:</span> This iframe content SHOULD appear in markdown (Full Page scope)</div>
     </div>

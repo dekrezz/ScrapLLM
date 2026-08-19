@@ -1,748 +1,136 @@
-# LLMFeeder - AI Agent & Contributor Guide
+# ScrapLLM — contributor and agent guide
 
-This guide is designed for AI agents (like Claude, ChatGPT, etc.) and human contributors working on the LLMFeeder browser extension. It provides a comprehensive reference for understanding the codebase, development workflow, and testing procedures.
+Everything an agent (or a person) needs to change this extension safely: how it is put together, what to run to prove a change works, and the rules that are not negotiable.
 
-## Table of Contents
+## Hard rules
 
-1. [Quick Reference](#quick-reference)
-2. [Repository Structure](#repository-structure)
-3. [Development Workflow](#development-workflow)
-4. [Extension Architecture](#extension-architecture)
-5. [Local Testing Guide](#local-testing-guide)
-6. [Debug Mode & Logging](#debug-mode--logging)
-7. [Common Development Tasks](#common-development-tasks)
-8. [Build & Release Process](#build--release-process)
-9. [CI/CD Pipeline](#cicd-pipeline)
+1. **Never run tests.** No jest, vitest, or any other runner, not one file. Build, type-check and lint instead — they are seconds, not minutes, and they prove the same things about a change of this kind.
+2. **No AI attribution in commits.** No `Co-Authored-By` trailers, no "generated with" footers.
+3. **No silent fallbacks.** If an extraction path fails, say so with a specific message; do not quietly degrade to a worse result without telling the user.
+4. **Commit message format** (enforced by a hook): area on line one (`Frontend`, `Backend`, `Docs`), blank line, `Changes:`, blank line, then bullets stating the user-visible result.
 
----
-
-## Quick Reference
+## What to run
 
 ```bash
-# Build extensions
-./scripts/build.sh chrome    # Chrome only
-./scripts/build.sh firefox   # Firefox only
-./scripts/build.sh all       # All packages
-make chrome                  # Alternative: using Make
-
-# Start local test server
-python3 -m http.server 8080
-
-# Git workflow
-git checkout -b feature/your-feature-name
-# ... make changes ...
-git add extension/
-git commit -m "feat: description"
-git push origin feature/your-feature-name
+node --check extension/<file>.js                 # syntax
+npx eslint@8 --no-eslintrc --env browser,es2022 \
+  --parser-options ecmaVersion:2022 extension/*.js
+bash scripts/build.sh all                        # packaging, all three targets
+jq empty extension/manifest.json                 # manifest validity
 ```
 
-**Key Files for Feature Development:**
-- `extension/content.js` - Core conversion logic (main content extraction, markdown)
-- `extension/reddit.js` - Reddit thread/listing extraction (post + comment tree)
-- `extension/x.js` - X (Twitter) thread/timeline extraction (post + replies)
-- `extension/motion.js` - Spring + gesture runtime shared by popup and content script
-- `extension/selection.js` - Highlighted-fragment excerpts (code vs prose, line range, source)
-- `extension/chat.js` - LLM conversation export (site API + DOM fallback)
-- `extension/popup.js` - Popup UI and settings handling
-- `extension/popup.html` - UI structure
-- `extension/styles.css` - Styling
-- `extension/manifest.json` - Extension configuration
+For UI work, load the built package and look at it. The popup can also be opened
+directly as `file://…/extension/popup.html` with a stubbed `chrome` API for
+quick visual checks.
 
-**Testing Files:**
-- `testbench.html` - Comprehensive test page
-- `iframe-content-test.html` - Nested iframe content for testing
-
----
-
-## Repository Structure
+## Architecture
 
 ```
-LLMFeeder/
-├── extension/                 # Browser extension source
-│   ├── icons/                # Extension icons (16, 48, 128px)
-│   ├── libs/                 # Third-party libraries
-│   │   ├── readability.js    # Mozilla content extraction
-│   │   ├── turndown.js       # HTML to Markdown
-│   │   └── browser-polyfill.js # Cross-browser compatibility
-│   ├── manifest.json         # Extension manifest (MV3 base)
-│   ├── popup.html            # Popup UI
-│   ├── popup.js              # Popup logic (18KB)
-│   ├── styles.css            # Popup styling
-│   ├── content.js            # Content script (42KB) - CORE LOGIC
-│   ├── reddit.js             # Reddit extractor (JSON API + DOM fallback)
-│   ├── x.js                  # X (Twitter) extractor (microdata + DOM, scroll collection)
-│   ├── motion.js             # Springs, gesture tracking, press feedback
-│   ├── selection.js          # Selection excerpts (code detection, line range)
-│   ├── chat.js               # Conversation export (ChatGPT, Claude, local UIs)
-│   └── background.js         # Background script for keyboard shortcuts
-│
-├── scripts/
-│   └── build.sh              # Build script (240 lines)
-│
-├── .github/workflows/
-│   ├── pr-validation.yml     # PR build validation
-│   └── release.yml           # Release asset upload
-│
-├── testbench.html             # Main testing page
-├── iframe-content-test.html   # Nested iframe test content
-├── Makefile                   # Build automation
-└── README.md                  # User documentation
+popup.js  ──messages──▶  content.js  ──▶  extractor (selection / chat / reddit / x / generic)
+   │                          │
+   │                          └──▶ Turndown ──▶ Markdown ──▶ clipboard / file
+   └── browser.storage.sync (settings, shared with background.js)
 ```
 
----
+`content.js` owns `convertToMarkdown(settings)`. It dispatches on `contentScope`
+and on the page itself, in this order:
 
-## Development Workflow
+| Condition | Handler |
+|-----------|---------|
+| `contentScope: 'chat'` | `ScrapLLMChat.convert()` — see `chat.js` |
+| `contentScope: 'selection'` | `ScrapLLMSelection.convert()` — see `selection.js` |
+| Reddit URL and `redditMode` | `ScrapLLMReddit.convert()` |
+| X URL and `xMode` | `ScrapLLMX.convert()` |
+| otherwise | Readability (main content) / full page / selection |
 
-### Step 1: Create a Feature Branch
+Extractors return `{ markdown, articleData }`, or `null` to mean "nothing here,
+fall through to the generic path". Anything else throws with a message the popup
+shows verbatim.
 
-```bash
-git checkout main
-git pull origin main
-git checkout -b feature/your-feature-name
-```
+### Message actions
 
-### Step 2: Make Changes
+| Action | Direction | Purpose |
+|--------|-----------|---------|
+| `convertToMarkdown` | popup/background → content | Run a conversion |
+| `getSelectionInfo` | popup → content | Is there a selection? (drives the Copy Selection button) |
+| `getChatInfo` | popup → content | Is this a conversation? (drives the Copy Chat button) |
+| `getDebugLogs`, `copyToClipboard`, `downloadMarkdown`, `downloadFile`, `showNotification` | popup → content | Utilities |
 
-Edit files in the `extension/` directory based on your feature:
+### Extractors
 
-| Change Type | Files to Modify |
-|-------------|-----------------|
-| New UI controls | `popup.html`, `popup.js`, `styles.css` |
-| New settings | `popup.js` (add to loadSettings/saveSettings) |
-| Content extraction logic | `content.js` |
-| Reddit post/comment output | `reddit.js` |
-| X (Twitter) thread/timeline output | `x.js` |
-| Motion, gestures, press feedback | `motion.js` |
-| Selection excerpt output | `selection.js` |
-| Chat transcript output | `chat.js` |
-| Keyboard shortcuts | `background.js`, `manifest.json` |
-| Permissions | `manifest.json` |
+**`selection.js`** — a highlighted fragment becomes a cited excerpt. Structure
+wins over heuristics: a highlighter's markup (`pre`, `.highlight`, `language-*`,
+`hljs-*`, `data-lang`) is authoritative; only when the DOM is silent does the
+scored text heuristic decide code vs prose. Code is emitted verbatim in a fence
+(dedented, fence length adapted to inner backticks) because Turndown escapes the
+punctuation that makes code readable. Output starts with
+`> Lines A to B of code|text from [host/path](url)`.
 
-### Step 3: Build and Test Locally
-
-```bash
-# Build Chrome extension
-./scripts/build.sh chrome
-
-# Extract for local testing
-unzip -q dist/LLMFeeder-Chrome-v*.zip -d /tmp/llmfeeder-test
-# OR just use the chrome-unpacked directory if created
-```
-
-### Step 4: Load in Browser
-
-1. Open `chrome://extensions/`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select the extracted extension directory (or `extension/` folder directly)
-
-### Step 5: Test with Test Bench
-
-```bash
-# In project root
-python3 -m http.server 8080
-```
-
-Then navigate to `http://localhost:8080/testbench.html` and test your changes.
-
-### Step 6: Commit and Push
-
-```bash
-git add extension/
-git commit -m "feat: description of changes"
-git push origin feature/your-feature-name
-```
-
----
-
-## Extension Architecture
-
-### Component Communication
-
-```
-┌─────────────────┐     messages     ┌─────────────────┐
-│   popup.js      │ ───────────────▶ │   content.js    │
-│  (UI/Settings)  │                  │ (Core Logic)    │
-└─────────────────┘                  └─────────────────┘
-        ▲                                    │
-        │                                    │
-        │ browser storage                   │
-        │                                    ▼
-┌─────────────────┐              ┌─────────────────┐
-│ browser.storage │              │   Turndown.js   │
-│  (sync prefs)   │              │  (HTML→MD)      │
-└─────────────────┘              └─────────────────┘
-                                         ▲
-                                         │
-┌─────────────────┐                      │
-│ background.js   │ ─────────────────────┘
-│ (shortcuts)     │
-└─────────────────┘
-```
-
-### Content Script (`content.js`) - Core Functions
-
-| Function | Purpose |
-|----------|---------|
-| `convertToMarkdown(settings)` | Main entry point for conversion |
-| `extractMainContent(doc)` | Uses Readability.js for article content |
-| `extractFullPageContent(doc)` | Full page extraction |
-| `extractSelectedContent()` | User-selected text only |
-| `configureTurndownService(settings)` | Configure Markdown conversion rules |
-| `cleanContent(content, settings)` | Remove unwanted elements |
-| `extractAndReplaceIframes...()` | Handle iframe content extraction |
-
-### Reddit Extractor (`reddit.js`)
-
-`convertToMarkdown()` hands Reddit URLs to `LLMFeederReddit.convert()` before the
-Readability path runs, because Readability drops the comment tree entirely.
-
-| Function | Purpose |
-|----------|---------|
-| `getPageType(location)` | `'post'`, `'listing'`, or `null` (null = generic pipeline) |
-| `convert(settings, deps)` | Entry point; returns `{ markdown, articleData }` or `null` |
-| `renderThread(json)` | Post header + body + nested comment tree |
-| `renderListing(json)` | Numbered index of posts/comments on feeds and profiles |
-| `extractFromDom(...)` | Fallback scraper for `shreddit-*` and old.reddit markup |
-
-Primary source is `<permalink>.json` fetched **same-origin** from the content
-script, so no extra host permission is needed and the user's session (private
-subs, logged-in sorts) applies. If that returns HTML (bot check / login wall) or
-fails, the DOM fallback runs; if both fail, conversion errors out with a
-Reddit-specific message rather than silently degrading.
-
-Relevant settings: `redditMode` (default on), `redditCommentSort`
-(`confidence` = Best), `redditMaxComments` (number or `'all'`).
-
-### X (Twitter) Extractor (`x.js`)
-
-`convertToMarkdown()` hands x.com / twitter.com URLs to `LLMFeederX.convert()`
-right after the Reddit hook. X virtualises its timelines, so Readability sees at
-most the first visible post.
-
-| Function | Purpose |
-|----------|---------|
-| `getPageType(location)` | `'post'`, `'listing'`, or `null` (null = generic pipeline) |
-| `convert(settings, deps)` | Entry point; returns `{ markdown, articleData }` or `null` |
-| `collectPosts(limit, budget)` | Scrolls the virtualised list, deduplicating by post id |
-| `renderThread(...)` | Root post + self-thread continuation + replies |
-| `renderListing(...)` | Numbered index of a profile, feed, search or list timeline |
-
-X exposes no guest-readable JSON API, so the DOM is the only source. Two layouts
-are read through the same per-field getters: the signed-out server-rendered page
-carries schema.org microdata (`article[data-tweet-id]`, `meta[itemprop=...]`)
-for ids, dates, author and engagement counts, and the signed-in React app is
-covered by its `data-testid` hooks (`tweet`, `tweetText`, `User-Name`,
-`tweetPhoto`), `time[datetime]` and the `div[role="group"]` aria-label counts.
-Fields that neither layout exposes stay empty rather than failing the
-conversion, and a route with no readable post returns `null` so the generic
-pipeline takes over.
-
-Because collection scrolls, `content.js` grants X pages the same
-`SCROLL_TIMEOUT_HEADROOM` it grants the lazy-loading pass; the extractor keeps
-its own `COLLECT_TIME_BUDGET` below that headroom.
-
-Relevant settings: `xMode` (default on), `xMaxPosts` (number or `'all'`),
-`xIncludeReplies` (default on).
-
-### Popup Script (`popup.js`) - Key Functions
-
-| Function | Purpose |
-|----------|---------|
-| `loadSettings()` | Load user preferences from storage |
-| `saveSettings()` | Save settings to browser storage |
-| `convertToMarkdown()` | Trigger conversion and copy to clipboard |
-| `downloadMarkdown()` | Trigger conversion and download as file |
-| `copyLogs()` | Copy debug logs from content script |
-
-### Message Actions (for communication between scripts)
-
-| Action | Source | Destination |
-|--------|--------|-------------|
-| `convertToMarkdown` | popup.js/background.js → content.js |
-| `getDebugLogs` | popup.js → content.js |
-| `copyToClipboard` | popup.js → content.js |
-| `downloadMarkdown` | popup.js → content.js |
-| `showNotification` | popup.js → content.js |
-
----
-
-### Chat Extractor (`chat.js`)
-
-`contentScope: 'chat'` routes through `LLMFeederChat.convert()`. The popup shows
-a black **Copy Chat** button with an exchange picker whenever `getChatInfo`
-reports a conversation on the page.
-
-| Function | Purpose |
-|----------|---------|
-| `getSite(location)` | Registry lookup: claude, chatgpt, gemini, grok, perplexity, deepseek, copilot, mistral, cursor, or any loopback origin |
-| `inspect()` | Probe for the popup: is this a chat, which site, how many exchanges |
-| `convert(settings, deps)` | `{ markdown, articleData }` or `null` |
-| `walkActiveBranch(...)` | Root→leaf path through the message tree |
-| `groupExchanges(messages)` | One exchange = a user turn plus the assistant's reply |
-
-A conversation is a tree, not a list: editing a message mid-thread grows a
-sibling branch and the old one stays in the database. Both API paths
-(`claude.ai` via `chat_conversations?tree=True`, `chatgpt.com` via
+**`chat.js`** — a conversation is a tree, not a list: editing a message
+mid-thread grows a sibling branch and the old one stays in the database. Both
+API paths (`claude.ai` via `chat_conversations?tree=True`, `chatgpt.com` via
 `/backend-api/conversation/<id>` with the session bearer token) walk parents up
-from the active leaf, so the export matches what the user sees. When there is no
-API — or it fails — the DOM path runs: known layouts first, then a role
-heuristic (author-role attributes, then class/testid/aria hints) so unknown and
-self-hosted front-ends still work.
+from the active leaf, so the export matches what the user sees. Everything else
+is read from the DOM: known layouts first, then role markers (author-role
+attributes, then class/testid/aria hints). Off the known hosts detection is
+deliberately conservative — four or more turns *and* explicit role markers on
+most of them — so a comment thread does not light the button up.
+`chatExchangeLimit` defaults to 10 exchanges, not 'all'.
 
-Detection is deliberately conservative off the known hosts: at least four turns
-*and* explicit role markers on most of them, otherwise a comment thread would
-light up the button. `chatExchangeLimit` defaults to 10 rather than 'all' —
-copying a multi-year thread whole is how you hang the tab.
+**`reddit.js`** — the post plus its comment tree from Reddit's own JSON, fetched
+same-origin (no extra host permission, and the user's session applies). Falls
+back to scraping `shreddit-*` or old.reddit markup when the JSON endpoint
+answers with the bot check.
 
-### Selection Extractor (`selection.js`)
+**`x.js`** — threads, profiles and timelines. Signed-out x.com serves a
+server-rendered page with schema.org microdata and no `data-testid`; the
+extractor reads that, with the logged-in app's selectors as per-field fallbacks.
 
-`contentScope: 'selection'` routes through `LLMFeederSelection.convert()` instead
-of the generic Turndown pass, and the popup shows a dedicated blue **Copy
-Selection** button whenever `getSelectionInfo` reports a live selection.
+### Motion and interface
 
-| Function | Purpose |
-|----------|---------|
-| `inspect()` | Cheap probe for the popup: has selection, code or prose, language, line range |
-| `convert(settings, deps)` | `{ markdown, articleData }` or `null` when nothing is selected |
-| `looksLikeCode(text)` | Scored heuristic (indentation, statement punctuation, declarations) used when the DOM gives no signal |
-| `describeLines(...)` | Line numbers inside a code block; paragraph-block indices for prose |
+`motion.js` owns every value the user can touch. Rules:
 
-Output always starts with `> Lines A to B of code|text from [host/path](url)`.
-Code is emitted verbatim inside a fence (dedented, fence length adapted to any
-backticks inside) because Turndown escapes the punctuation that makes code
-readable; prose goes through the configured Turndown instance. The metadata
-block is suppressed for excerpts — the header already names the source.
-
-Structure wins over heuristics: a highlighter's own markup (`pre`, `.highlight`,
-`language-*`, `hljs-*`, `data-lang`) is authoritative, and a versioned class
-like `highlight-python3` normalises to `python`. A language is only guessed when
-the signal is unambiguous — a wrong fence label is worse than none.
-
-## Interface Design
-
-The UI follows Apple's fluid-interface guidance (WWDC *Designing Fluid
-Interfaces*, *The Details of UI Typography*). Four rules decide most reviews:
-
-1. **Anything the user can touch is spring-driven, never a CSS transition.**
-   `motion.js` owns those values. A transition cannot be grabbed and reversed
-   mid-flight; a spring re-targets from its live value and carries its velocity,
-   which is what makes an interrupted gesture feel continuous. CSS transitions
-   are allowed only for colour, opacity, shadow and the press scale.
-2. **Feedback lands on pointer-down.** `Motion.pressable()` adds `.is-pressed`
-   on `pointerdown`, drops it when the pointer leaves the control (with ~10px of
-   slop) and re-arms it on return. Never wait for `click` to acknowledge a press.
+1. **Springs, never CSS transitions, for anything gesture-driven.** A transition
+   cannot be grabbed and reversed mid-flight; a spring re-targets from its live
+   value and carries velocity. CSS transitions are allowed only for colour,
+   opacity, shadow and the press scale.
+2. **Feedback on pointer-down.** `Motion.pressable()` adds `.is-pressed` on
+   `pointerdown`, drops it when the pointer leaves (with ~10px of slop).
 3. **Gestures track 1:1, then hand off velocity.** `Motion.draggable()` gives
-   pointer capture, a 10px direction threshold and a release velocity;
-   `Motion.project()` picks the landing target from where the flick is going and
-   `Motion.rubberband()` resists past the edges.
-4. **Chrome is a material.** Header, menus and the notification card are
-   translucent layers (`backdrop-filter`) with content passing underneath, and a
-   scroll-edge mask instead of a 1px divider.
-
-`motion.js` API:
+   pointer capture and a release velocity; `Motion.project()` picks the landing
+   target from where the flick is going; `Motion.rubberband()` resists at edges.
+4. **Chrome is a material** — translucent layers with content passing under, and
+   a scroll-edge mask instead of divider lines.
 
 | Export | Purpose |
 |--------|---------|
-| `new Spring(value, {damping, response, onUpdate, onRest})` | Apple's parameter pair: `damping` 1.0 = no overshoot, `response` = seconds to approach |
-| `spring.to(target, {velocity})` / `spring.set(value)` | Re-target mid-flight / write directly while a finger is down |
+| `new Spring(value, {damping, response, onUpdate, onRest})` | `damping` 1.0 = no overshoot, `response` = seconds to approach |
+| `spring.to(target, {velocity})` / `spring.set(value)` | Re-target mid-flight / write directly during a drag |
 | `PRESETS` | `move` (1.0/0.4), `sheet` (0.8/0.3), `rotate` (0.8/0.4), `snappy` (1.0/0.28) |
-| `project(velocity)` | Momentum landing point, exponential decay (`d = 0.998`) |
-| `rubberband(overshoot, dimension)` | Progressive boundary resistance |
-| `draggable(el, opts)` / `pressable(root, selector)` | Gesture tracking / press feedback |
-| `prefersReducedMotion()` | Springs land immediately; components cross-fade instead |
+| `project`, `rubberband`, `draggable`, `pressable`, `prefersReducedMotion` | Momentum, boundaries, gestures, press state, accessibility |
 
-Accessibility is part of the component, not a later pass: `styles.css` answers
-`prefers-reduced-motion`, `prefers-reduced-transparency` (frostier, no blur) and
-`prefers-contrast: more` (near-solid surfaces with borders). Type uses the
-platform font with size-specific tracking (tight on large text, open on small
-caps) and rem spacing so the user's text-size setting grows the layout.
+`styles.css` answers `prefers-reduced-motion` (cross-fades, no travel),
+`prefers-reduced-transparency` (frosted-solid surfaces) and
+`prefers-contrast: more` (near-opaque, bordered). Type uses the platform font
+with size-specific tracking and rem spacing, so the user's text-size setting
+grows the layout.
 
----
+## Adding a setting
 
-## Local Testing Guide
+1. Default in `extension/settings.js` (shared by popup and background).
+2. Control in `popup.html`.
+3. Plumbing in `popup.js`: element handle, `loadSettings`, `saveSettings`,
+   `getCurrentSettings`, the two inline conversion payloads, and a change listener.
+4. Read it in `content.js` or the relevant extractor.
 
-### Quick Test Cycle
+## Adding a file to the extension
 
-```bash
-# 1. Build extension
-./scripts/build.sh chrome
+`manifest.json` (`content_scripts[0].js`, order matters — helpers before
+`content.js`) **and** `scripts/build.sh`, which copies files explicitly in three
+places (Chrome, Firefox, source).
 
-# 2. Extract to temp location
-mkdir -p /tmp/llmfeeder-test
-unzip -q -o dist/LLMFeeder-Chrome-v*.zip -d /tmp/llmfeeder-test
+## Browser differences
 
-# 3. Start test server
-python3 -m http.server 8080
-```
-
-### Test Bench Scenarios
-
-Open `http://localhost:8080/testbench.html` and test:
-
-| Test | Description | Expected Behavior |
-|------|-------------|-------------------|
-| Test 1 | Main content extraction | Article content converted to Markdown |
-| Test 2 | srcdoc iframe | Same-origin iframe content extracted |
-| Test 3 | Nested iframe | Same-origin nested content extracted |
-| Test 4 | Cross-origin iframe | Warning message about inaccessible content |
-| Test 5 | Sandboxed iframe | May or may not extract (browser-dependent) |
-| Test 6 | Standard HTML table | Proper Markdown table with separator |
-| Test 7 | GitHub-style table | Markdown table without `<thead>` |
-| Test 8 | Empty cells | Empty cells handled correctly |
-
-### Test Settings to Use
-
-When testing with the test bench:
-
-1. **Enable Debug Mode** (gear icon → Debug Mode checkbox)
-2. **Enable "Preserve Tables"** for table tests
-3. **Set Content Scope to "Full Page"** for iframe tests
-4. **Set Content Scope to "Main Content"** for article tests
-
-### After Testing
-
-1. Click "Copy Logs" button in settings to get debug output
-2. Paste logs in your PR or issue for troubleshooting
-3. Click "Remove" on the extension in `chrome://extensions/`
-4. Reload extension after code changes (click reload icon)
-
----
-
-## Debug Mode & Logging
-
-### Enabling Debug Mode
-
-1. Open LLMFeeder popup
-2. Click gear icon (Settings)
-3. Check "Debug Mode" checkbox
-4. Logs are now collected during conversions
-
-### Accessing Debug Logs
-
-1. After running a conversion, go to Settings
-2. Click "Copy Logs" button
-3. Logs are copied to clipboard
-4. Paste in issue/PR for debugging
-
-### Debug Log Format
-
-```
-[2025-01-26T12:34:56.789Z] Conversion started
-{
-  "contentScope": "mainContent",
-  "preserveTables": true,
-  "includeImages": true,
-  "includeTitle": true
-}
-[2025-01-26T12:34:56.890Z] Content extracted
-{
-  "innerHTMLLength": 45678
-}
-[2025-01-26T12:34:57.123Z] Conversion successful
-{
-  "markdownLength": 12345,
-  "hasTables": true
-}
-```
-
-### Adding Debug Logs
-
-In `content.js`, use the `DebugLog` object:
-
-```javascript
-DebugLog.log('Your message here', { key: 'value' });
-DebugLog.error('Error message', errorObject);
-```
-
----
-
-## Common Development Tasks
-
-### Adding a New Setting
-
-1. **Add to `popup.html`** - Create UI element (checkbox, radio, input)
-2. **Add to `popup.js`** - Add to `loadSettings()` and `saveSettings()`
-3. **Add to `content.js`** - Use in `convertToMarkdown()` function
-
-```javascript
-// In popup.js
-const myNewSetting = document.getElementById("myNewSetting");
-
-// In loadSettings()
-myNewSetting.checked = data.myNewSetting || false;
-
-// In saveSettings()
-const myNewSetting = myNewSetting.checked;
-await browserAPI.storage.sync.set({ myNewSetting });
-
-// In content.js convertToMarkdown()
-const myNewSetting = settings.myNewSetting || false;
-```
-
-### Adding a New Keyboard Shortcut
-
-1. **Edit `manifest.json`** - Add to `commands` section:
-
-```json
-"my_new_command": {
-  "suggested_key": {
-    "default": "Alt+Shift+N",
-    "mac": "Alt+Shift+N"
-  },
-  "description": "My new command description"
-}
-```
-
-2. **Edit `background.js`** - Add handler:
-
-```javascript
-chrome.commands.onCommand.addListener((command) => {
-  if (command === 'my_new_command') {
-    // Your logic here
-  }
-});
-```
-
-### Adding Custom Markdown Conversion Rules
-
-In `content.js`, modify `configureTurndownService()`:
-
-```javascript
-turndownService.addRule('myCustomRule', {
-  filter: 'myElement',
-  replacement: function(content, node) {
-    // Return markdown representation
-    return '**Custom:** ' + content;
-  }
-});
-```
-
-### Modifying Table Handling
-
-Tables are handled in `configureTurndownService()` when `settings.preserveTables` is true. Key rules:
-- `table` - Wraps content in newlines
-- `tableRow` - Creates pipe-separated rows with header separator
-- `tableCell` - Formats individual cells
-- `thead`/`tbody` - Prevent extra newlines
-
----
-
-## Build & Release Process
-
-### Build System Overview
-
-The project uses two build methods:
-
-1. **Shell Script** (`scripts/build.sh`) - Full-featured build
-2. **Makefile** - Convenient targets
-
-### Build Script Usage
-
-```bash
-# Build all packages
-./scripts/build.sh all
-
-# Build specific package
-./scripts/build.sh chrome
-./scripts/build.sh firefox
-./scripts/build.sh source
-
-# Build with custom version
-./scripts/build.sh --version 2.2.1 all
-```
-
-### Output Files
-
-Built packages are created in `dist/`:
-
-- `LLMFeeder-Chrome-v{version}.zip` - Chrome extension
-- `LLMFeeder-Firefox-v{version}.zip` - Firefox extension
-- `LLMFeeder-Source-v{version}.zip` - Source package
-
-### Version Bumping
-
-1. Edit `extension/manifest.json`:
-   ```json
-   "version": "2.2.1"
-   ```
-
-2. Build with version:
-   ```bash
-   ./scripts/build.sh --version 2.2.1 all
-   ```
-
----
-
-## CI/CD Pipeline
-
-### Pull Request Validation (`.github/workflows/pr-validation.yml`)
-
-Triggered on:
-- PR opened, synchronized, or reopened
-- Push to main branch
-
-Validates:
-- Chrome package builds
-- Firefox package builds
-- Source package builds
-- Manifest JSON validity
-
-### Release Workflow (`.github/workflows/release.yml`)
-
-Triggered on:
-- GitHub release creation
-
-Actions:
-- Extracts version from git tag
-- Builds all packages with version
-- Uploads assets to release
-
-### Creating a Release
-
-```bash
-# Tag and push
-git tag v2.2.1
-git push origin v2.2.1
-
-# Then create release on GitHub
-# CI will automatically build and upload packages
-```
-
----
-
-## Browser Compatibility Notes
-
-### Chrome (Manifest V3)
-- Uses `service_worker` in background
-- Default for new features
-
-### Firefox (Manifest V2)
-- Uses `scripts` array in background
-- Build script automatically converts manifest
-
-### Cross-Browser Considerations
-
-- Use `browserAPI` wrapper in `popup.js`
-- Use `browserRuntime` wrapper in `content.js`
-- Test on both browsers before submitting PR
-
----
-
-## Settings Reference
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `contentScope` | string | "mainContent" | "mainContent", "fullPage", or "selection" |
-| `preserveTables` | boolean | true | Convert HTML tables to Markdown |
-| `includeImages` | boolean | true | Include images in output |
-| `includeTitle` | boolean | true | Prepend page title as H1 |
-| `includeMetadata` | boolean | true | Append metadata block |
-| `metadataFormat` | string | "---\nSource: [{title}]({url})" | Metadata template |
-| `debugMode` | boolean | false | Enable debug logging |
-| `triggerLazyLoading` | boolean | false | Auto-scroll chat/AI surfaces before extraction |
-| `redditMode` | boolean | true | Use the Reddit extractor on reddit.com |
-| `redditCommentSort` | string | "confidence" | Reddit comment sort (`confidence`, `top`, `new`, `controversial`, `old`, `qa`) |
-| `redditMaxComments` | number\|string | 250 | Comment ceiling per thread; `"all"` for no cap |
-| `xMode` | boolean | true | Use the X extractor on x.com / twitter.com |
-| `xMaxPosts` | number\|string | 100 | Post ceiling per page (replies or timeline entries); `"all"` for no cap |
-| `xIncludeReplies` | boolean | true | Include replies when capturing an X thread |
-
-### Metadata Template Variables
-
-- `{title}` - Page title
-- `{url}` - Page URL
-- `{date}` - Published date
-- `{author}` - Article author
-- `{siteName}` - Site name
-- `{excerpt}` - Article excerpt
-
----
-
-## Troubleshooting
-
-### Extension not loading
-- Check `manifest.json` for syntax errors
-- Verify all referenced files exist
-- Check browser console for errors
-
-### Content extraction not working
-- Enable debug mode
-- Copy logs and check for errors
-- Verify content scope setting
-
-### Tables not converting to Markdown
-- Ensure "Preserve Tables" is enabled
-- Check if HTML table structure is valid
-- Review debug logs for conversion errors
-
-### Build script fails
-- Ensure `jq` and `zip` are installed
-- Make script executable: `chmod +x ./scripts/build.sh`
-- Check file permissions in `extension/` directory
-
----
-
-## Contributing Guidelines
-
-1. **Branch Naming**: Use `feature/`, `fix/`, or `docs/` prefixes
-2. **Commit Messages**: Use conventional commits (`feat:`, `fix:`, `docs:`, etc.)
-3. **Testing**: Always test with `testbench.html` before submitting
-4. **Debug Logs**: Include debug logs when reporting issues
-5. **Attribution**: Commits carry no AI co-author trailers or generated-by footers
-
-```
-feat: add new feature description
-```
-
----
-
-## Quick Command Reference
-
-```bash
-# Development
-make chrome                  # Build Chrome
-make firefox                 # Build Firefox
-make clean                   # Clean dist/
-make help                    # Show help
-
-# Testing
-python3 -m http.server 8080  # Start test server
-open http://localhost:8080/testbench.html
-
-# Git
-git checkout -b feature/name # New branch
-git add extension/           # Stage changes
-git commit -m "feat: desc"   # Commit
-git push origin feature/name # Push
-
-# Cleanup
-lsof -ti:8080 | xargs kill   # Kill server on port 8080
-```
-
----
-
-## External Libraries
-
-| Library | Version | Purpose |
-|---------|---------|---------|
-| Readability.js | Mozilla | Content extraction from web pages |
-| Turndown.js | - | HTML to Markdown conversion |
-| browser-polyfill.js | - | Cross-browser API compatibility |
-
-These are located in `extension/libs/` and should not be modified without careful consideration.
-
----
-
-## Cursor Cloud specific instructions
-
-Durable notes for agents working in the Cursor Cloud VM. Standard commands live in the sections above; this section only captures non-obvious caveats.
-
-- No package manager / no install step: there is no `package.json`, lockfile, or `node_modules`. Third-party libs are vendored in `extension/libs/`. The startup update script has nothing to install; it only ensures `scripts/build.sh` is executable.
-- Toolchain is preinstalled in the VM: `jq`, `zip`, `python3`, `make`, Chrome (`/usr/local/bin/google-chrome`), and Firefox (`/usr/local/bin/firefox` → `/opt/firefox`, installed from Mozilla's tarball for cross-browser testing). Both browsers persist in the VM snapshot, so they are not part of the update script.
-- There is no unit-test suite. The "lint/test" equivalent is the build + manifest-JSON validation done in CI (`.github/workflows/pr-validation.yml`): `bash scripts/build.sh all` then `jq empty` on the generated Chrome/Firefox manifests. Run those to validate changes.
-- Build/run: `bash scripts/build.sh chrome` (or `firefox`/`source`/`all`). Output zips go to `dist/` (gitignored).
-- End-to-end test flow: extract the Chrome zip (e.g. `unzip -o dist/LLMFeeder-Chrome-v*.zip -d /tmp/llmfeeder-chrome`), load it unpacked at `chrome://extensions/` (Developer mode → Load unpacked), start `python3 -m http.server 8080` from repo root, open `http://localhost:8080/testbench.html`, then use the popup's "Convert & Copy" button.
-- Prefer loading the built Chrome package (from `dist/`) rather than the raw `extension/` folder: the source `manifest.json` is MV3 with `browser_specific_settings`/`menus` that Chrome ignores/warns on; `build.sh` strips those for a clean Chrome load. Firefox needs the built package because `build.sh` rewrites the background section.
-- Firefox E2E: build (`bash scripts/build.sh firefox`), extract (`unzip -o dist/LLMFeeder-Firefox-v*.zip -d /tmp/llmfeeder-firefox`), launch `firefox &`, go to `about:debugging#/runtime/this-firefox` → "Load Temporary Add-on…" → pick `/tmp/llmfeeder-firefox/manifest.json`. The temp add-on has a temporary ID (expected). Both Chrome and Firefox conversions were verified end-to-end against `testbench.html`.
-- Token counting fetches encodings from `https://tiktoken.pages.dev/*` but has an offline heuristic fallback and caches results, so core convert/copy/download works without network access.
+Chrome is MV3 with a service worker; the build script rewrites the manifest for
+Firefox (MV2 background scripts, `browser_specific_settings`). Use the
+`browserAPI` wrapper in the popup and `browserRuntime` in content scripts.

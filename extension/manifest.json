@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "LLMFeeder - Web to Markdown for AI",
+  "name": "ScrapLLM - Web to Markdown for AI",
   "version": "2.2.1",
   "description": "Convert any webpage to clean Markdown for ChatGPT, Claude & Gemini. Multi-tab copy, token counter. 100% private.",
-  "author": "@jatinkrmalik",
+  "author": "dekrezz",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -11,7 +11,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "llmfeeder@j47.in",
+      "id": "scrapllm@dekrezz.github.io",
       "strict_min_version": "109.0"
     }
   },
@@ -58,7 +58,7 @@
         "default": "Alt+Shift+L",
         "mac": "Alt+Shift+L"
       },
-      "description": "Open LLMFeeder"
+      "description": "Open ScrapLLM"
     },
     "convert_to_markdown": {
       "suggested_key": {

@@ -1,4 +1,4 @@
-// LLMFeeder Chat
+// ScrapLLM Chat
 // Copies an LLM conversation — the whole thread or just the last N exchanges,
 // where one exchange is a user turn plus the assistant's reply.
 //
@@ -16,7 +16,7 @@
 //    (Open WebUI, LibreChat, LobeChat, AnythingLLM, Jan…). Known layouts are
 //    matched first; unknown ones fall back to a role-detection heuristic, so a
 //    front-end nobody has heard of still works if it labels its turns at all.
-const LLMFeederChat = (function () {
+const ScrapLLMChat = (function () {
   'use strict';
 
   const ROOT_PARENT = '00000000-0000-4000-8000-000000000000';
@@ -490,9 +490,9 @@ const LLMFeederChat = (function () {
 })();
 
 if (typeof window !== 'undefined') {
-  window.LLMFeederChat = LLMFeederChat;
+  window.ScrapLLMChat = ScrapLLMChat;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = LLMFeederChat;
+  module.exports = ScrapLLMChat;
 }
