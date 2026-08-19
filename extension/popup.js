@@ -145,11 +145,8 @@ const redditMaxCommentsSelect = document.getElementById("redditMaxComments");
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
 const tokenCountValue = document.getElementById("tokenCountValue");
-const tokenLimitValue = document.getElementById("tokenLimitValue");
-const tokenProgressBar = document.getElementById("tokenProgressBar");
 const tokenWarning = document.getElementById("tokenWarning");
 const showTokenCountCheckbox = document.getElementById("showTokenCount");
-const tokenContextLimitSelect = document.getElementById("tokenContextLimit");
 
 // Tagline element
 const tagline = document.getElementById("tagline");
@@ -175,15 +172,119 @@ const DEFAULT_TOKEN_SETTINGS = {
   tokenContextLimit: 8192
 };
 
-// View navigation
+// ---------------------------------------------------------------------------
+// FLUID NAVIGATION
+// ---------------------------------------------------------------------------
+// The settings panel is a surface the user can push, not a slide that plays.
+// One spring owns a single 0..1 progress value; the pointer writes to it
+// directly while a finger is down and hands its release velocity to the spring
+// afterwards, so a half-open panel can be grabbed, reversed or thrown at any
+// moment without waiting for anything to finish.
+
+const Motion = window.LLMFeederMotion;
+const NAV_EDGE_DIM = 400; // popup width in px; the travel distance of the pan
+
+const navSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.move.damping,
+  response: Motion.PRESETS.move.response,
+  onUpdate: (progress) => renderNav(progress)
+});
+
+function renderNav(progress) {
+  // Settings slides in from the right; main is pushed back and dimmed so the
+  // hierarchy between the two layers stays readable while they travel.
+  settingsView.style.transform = `translate3d(${(1 - progress) * 100}%, 0, 0)`;
+  mainView.style.transform = `translate3d(${progress * -28}%, 0, 0)`;
+  mainView.style.opacity = String(1 - progress * 0.4);
+
+  // Reduced motion: the panel doesn't travel (motion.js lands the spring
+  // immediately), so the state change is carried by a short cross-fade
+  // instead of a jump cut.
+  if (Motion.prefersReducedMotion()) {
+    settingsView.style.opacity = progress > 0.5 ? "1" : "0";
+    mainView.style.opacity = progress > 0.5 ? "0" : "1";
+  } else {
+    settingsView.style.opacity = "1";
+  }
+
+  const settingsShown = progress > 0.01;
+  settingsView.setAttribute("aria-hidden", settingsShown ? "false" : "true");
+  mainView.setAttribute("aria-hidden", progress > 0.99 ? "true" : "false");
+  settingsView.classList.toggle("active", progress > 0.5);
+  mainView.classList.toggle("slide-out", progress > 0.5);
+}
+
 function showSettingsView() {
-  mainView.classList.add("slide-out");
-  settingsView.classList.add("active");
+  navSpring.to(1, Motion.PRESETS.move);
+  // Focus the exit before the panel lands: the user must never be trapped.
+  backToMainBtn.focus({ preventScroll: true });
 }
 
 function showMainView() {
-  mainView.classList.remove("slide-out");
-  settingsView.classList.remove("active");
+  navSpring.to(0, Motion.PRESETS.move);
+  openSettingsBtn.focus({ preventScroll: true });
+}
+
+// Both directions travel the same axis, and either can be driven by hand:
+// drag left anywhere on the main view to reveal settings, drag right on the
+// settings view to put it back.
+function initNavGestures() {
+  const settleNav = (progress, velocityPxPerSecond) => {
+    // Where the flick is going, not where the finger stopped.
+    const projectedPx = progress * NAV_EDGE_DIM + Motion.project(velocityPxPerSecond);
+    const projected = projectedPx / NAV_EDGE_DIM;
+    // Velocity sign wins over position whenever the gesture had real intent.
+    const decisive = Math.abs(velocityPxPerSecond) > 120;
+    const target = decisive
+      ? (velocityPxPerSecond > 0 ? 1 : 0)
+      : (projected > 0.5 ? 1 : 0);
+
+    navSpring.to(target, {
+      damping: Motion.PRESETS.sheet.damping,
+      response: Motion.PRESETS.sheet.response,
+      // Continue at exactly the speed the finger left, so there is no seam
+      // between dragging and animating.
+      velocity: velocityPxPerSecond / NAV_EDGE_DIM
+    });
+  };
+
+  const track = (startProgress, deltaPx) => {
+    // Raw 1:1 tracking inside the range, progressive resistance outside it.
+    let progress = startProgress + deltaPx / NAV_EDGE_DIM;
+    if (progress > 1) {
+      progress = 1 + Motion.rubberband(progress - 1, 1);
+    } else if (progress < 0) {
+      progress = Motion.rubberband(progress, 1);
+    }
+    navSpring.set(progress);
+  };
+
+  let startProgress = 0;
+
+  Motion.draggable(settingsView, {
+    axis: "x",
+    canStart: (event) => navSpring.value > 0.5 && !event.target.closest("textarea, select, input"),
+    onStart: () => { startProgress = navSpring.value; },
+    // Dragging right (positive delta) closes, so the progress delta is negated.
+    onMove: ({ delta }) => track(startProgress, -delta),
+    onEnd: ({ delta, velocity, cancelled }) => {
+      if (cancelled) { navSpring.to(startProgress, Motion.PRESETS.move); return; }
+      track(startProgress, -delta);
+      settleNav(navSpring.value, -velocity);
+    }
+  });
+
+  Motion.draggable(mainView, {
+    axis: "x",
+    canStart: (event) => navSpring.value < 0.5 && !event.target.closest("button, a, input, select, textarea"),
+    onStart: () => { startProgress = navSpring.value; },
+    onMove: ({ delta }) => track(startProgress, -delta),
+    onEnd: ({ delta, velocity, cancelled }) => {
+      if (cancelled) { navSpring.to(startProgress, Motion.PRESETS.move); return; }
+      track(startProgress, -delta);
+      settleNav(navSpring.value, -velocity);
+    }
+  });
 }
 
 // Theme management
@@ -209,20 +310,6 @@ function initTheme() {
 }
 
 /**
- * Format large numbers for display (e.g., 128000 -> "128K")
- * @param {number} num - Number to format
- * @returns {string} Formatted string
- */
-function formatTokenLimit(num) {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + 'M';
-  } else if (num >= 1000) {
-    return (num / 1000).toFixed(0) + 'K';
-  }
-  return num.toString();
-}
-
-/**
  * Update token counter display
  * @param {number} count - Token count
  * @param {number} limit - Context limit
@@ -230,21 +317,11 @@ function formatTokenLimit(num) {
 function updateTokenDisplay(count, limit) {
   currentTokenCount = count;
 
-  // Update values
+  // The count is the whole display: a number and its unit. The budget is only
+  // surfaced when it is actually at risk (see updateTokenWarning).
   tokenCountValue.textContent = count.toLocaleString();
-  tokenLimitValue.textContent = formatTokenLimit(limit);
 
-  // Calculate percentage
   const percentage = Math.min((count / limit) * 100, 100);
-  tokenProgressBar.style.width = percentage + '%';
-
-  // Update progress bar color based on percentage
-  tokenProgressBar.classList.remove('warning', 'error');
-  if (percentage >= 100) {
-    tokenProgressBar.classList.add('error');
-  } else if (percentage >= 75) {
-    tokenProgressBar.classList.add('warning');
-  }
 
   // Show/hide counter and tagline
   if (showTokenCountCheckbox.checked) {
@@ -374,7 +451,6 @@ async function loadSettings() {
     redditCommentSortSelect.value = data.redditCommentSort;
     redditMaxCommentsSelect.value = String(data.redditMaxComments);
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
-    tokenContextLimitSelect.value = tokenSettings.tokenContextLimit.toString();
 
     // Show/hide metadata format container based on checkbox state
     updateMetadataFormatVisibility(data.includeMetadata);
@@ -404,7 +480,7 @@ async function saveSettings() {
     const redditCommentSort = redditCommentSortSelect.value;
     const redditMaxComments = redditMaxCommentsSelect.value;
     const showTokenCount = showTokenCountCheckbox.checked;
-    const tokenContextLimit = parseInt(tokenContextLimitSelect.value, 10);
+    const tokenContextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
 
     await browserAPI.storage.sync.set({
       contentScope,
@@ -471,7 +547,7 @@ async function copyLogs() {
       statusIndicator.textContent = "No logs to copy";
       statusIndicator.className = "status error";
       setTimeout(() => {
-        statusIndicator.textContent = "Ready";
+        statusIndicator.textContent = "";
         statusIndicator.className = "status";
       }, 2000);
     }
@@ -479,7 +555,7 @@ async function copyLogs() {
     statusIndicator.textContent = "Error: " + error.message;
     statusIndicator.className = "status error";
     setTimeout(() => {
-      statusIndicator.textContent = "Ready";
+      statusIndicator.textContent = "";
       statusIndicator.className = "status";
     }, 2000);
   }
@@ -786,7 +862,7 @@ async function processMultiTabAction(actionFn) {
     statusIndicator.className = "status success";
 
     if (totalTokenCount > 0) {
-      const contextLimit = parseInt(tokenContextLimitSelect.value, 10);
+      const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
       updateTokenDisplay(totalTokenCount, contextLimit);
     }
 
@@ -905,7 +981,7 @@ async function convertToMarkdown(scopeOverride) {
     statusIndicator.className = "status success";
 
     // Update token display
-    const contextLimit = parseInt(tokenContextLimitSelect.value, 10);
+    const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
     updateTokenDisplay(tokenCount, contextLimit);
 
     // Save settings
@@ -998,7 +1074,7 @@ async function downloadMarkdown() {
     statusIndicator.className = "status success";
 
     // Update token display
-    const contextLimit = parseInt(tokenContextLimitSelect.value, 10);
+    const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
     updateTokenDisplay(tokenCount, contextLimit);
 
     // Save settings
@@ -1040,27 +1116,69 @@ function updateConvertSplitVisibility() {
   }
 }
 
+// The menu is a material arriving, not an element fading: blur, scale and
+// offset resolve together out of the caret that opened it, and dismissal
+// retraces the same path so the spatial relationship stays obvious.
+const menuSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.snappy.damping,
+  response: Motion.PRESETS.snappy.response,
+  onUpdate: (value) => {
+    const eased = Motion.clamp(value, 0, 1.05);
+    convertMenu.style.transform =
+      `translate3d(0, ${(1 - eased) * 6}px, 0) scale(${0.9 + eased * 0.1})`;
+    convertMenu.style.opacity = String(Motion.clamp(eased * 1.4, 0, 1));
+    convertMenu.style.filter = eased > 0.99 ? "none" : `blur(${(1 - eased) * 6}px)`;
+    caretSpring.to(eased > 0.5 ? 1 : 0, Motion.PRESETS.snappy);
+  },
+  onRest: (spring) => {
+    if (spring.value <= 0.001) convertMenu.classList.add("hidden");
+  }
+});
+
+const caretSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.rotate.damping,
+  response: Motion.PRESETS.rotate.response,
+  onUpdate: (value) => {
+    const caret = convertMenuBtn.querySelector(".caret-icon");
+    if (caret) caret.style.transform = `rotate(${value * 180}deg)`;
+  }
+});
+
+function isConvertMenuOpen() {
+  return !convertMenu.classList.contains("hidden") && menuSpring.target > 0.5;
+}
+
 function openConvertMenu() {
   convertMenu.classList.remove("hidden");
   convertMenuBtn.setAttribute("aria-expanded", "true");
+  menuSpring.to(1, Motion.PRESETS.snappy);
   convertOverrideBtn.focus();
 }
 
 function closeConvertMenu() {
-  convertMenu.classList.add("hidden");
   convertMenuBtn.setAttribute("aria-expanded", "false");
+  if (convertMenu.classList.contains("hidden")) return;
+  menuSpring.to(0, Motion.PRESETS.snappy);
 }
 
 function toggleConvertMenu() {
-  if (convertMenu.classList.contains("hidden")) {
-    openConvertMenu();
-  } else {
+  if (isConvertMenuOpen()) {
     closeConvertMenu();
+  } else {
+    openConvertMenu();
   }
 }
 
 // Event Listeners
 document.addEventListener("DOMContentLoaded", async () => {
+  // Feedback on pointer-down, gestures available from the first frame.
+  Motion.pressable(
+    document,
+    "button, a.icon-btn, .setting-option, .split-btn-menu-item"
+  );
+  initNavGestures();
+  renderNav(0);
+
   initTheme();
   updateShortcutDisplay();
   await loadSettings();
@@ -1098,13 +1216,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   document.addEventListener("click", (e) => {
-    if (!convertMenu.classList.contains("hidden") && !convertSplit.contains(e.target)) {
+    if (isConvertMenuOpen() && !convertSplit.contains(e.target)) {
       closeConvertMenu();
     }
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !convertMenu.classList.contains("hidden")) {
+    if (e.key === "Escape" && isConvertMenuOpen()) {
       closeConvertMenu();
       convertMenuBtn.focus();
     }
@@ -1169,19 +1287,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     saveSettings();
     // Toggle visibility immediately
     if (showTokenCountCheckbox.checked && currentTokenCount > 0) {
-      const contextLimit = parseInt(tokenContextLimitSelect.value, 10);
+      const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
       updateTokenDisplay(currentTokenCount, contextLimit);
     } else {
       hideTokenDisplay();
-    }
-  });
-
-  tokenContextLimitSelect.addEventListener("change", () => {
-    saveSettings();
-    // Update display if we have a current count
-    if (currentTokenCount > 0) {
-      const contextLimit = parseInt(tokenContextLimitSelect.value, 10);
-      updateTokenDisplay(currentTokenCount, contextLimit);
     }
   });
 

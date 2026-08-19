@@ -34,7 +34,7 @@ A browser extension that converts web page content to clean Markdown format and 
 
 - 🗂️ **Multi-Tab Support** - Convert multiple tabs at once! Select multiple tabs with Ctrl/Cmd+Shift and use Copy All, Download Merged, or Download as ZIP
 - 🖱️ **Right-Click Context Menus** - Quick access to conversion options directly from the right-click menu on any webpage
-- 📊 **Token Counter** - Real-time token count estimation (GPT-4/Claude tokenizer) with configurable context limits (4K to 32K)
+- 📊 **Token Counter** - Real-time token count estimation (GPT-4/Claude tokenizer) shown after each conversion
 - 🔗 **Include Links Toggle** - New option to include or strip links from Markdown output (reduce token usage when URLs aren't needed)
 - 🐛 **Debug Mode & Logging** - Built-in diagnostic system to help troubleshoot conversion issues
 - 🖼️ **Cross-Origin Iframe Support** - Improved extraction of embedded content from iframes
@@ -65,10 +65,11 @@ This architecture ensures that your content remains exclusively on your device t
 
 - **Multi-Tab Support**: Convert multiple selected tabs at once - merge into single file or download as ZIP
 - **Reddit Mode**: On Reddit, copies the post *and* its full comment tree — subreddit, flair, score, author, nesting — instead of the article-only extraction
+- **Fluid Interface**: Spring-driven, interruptible motion with drag gestures (swipe between panels, swipe notifications away), instant press feedback, translucent materials, and full support for reduced-motion, reduced-transparency and high-contrast settings
 - **Lazy-Loading Auto-Scroll**: Opt-in scroll pass for chat/AI UIs so long conversations aren't truncated
 - **Alternative Copy Mode**: One-click Full Page / Main Content override from the copy button
 - **Right-Click Context Menus**: Quick conversion access from anywhere on a page
-- **Token Counter**: Real-time token estimation with configurable LLM context limits
+- **Token Counter**: Real-time token estimation shown as a plain count after conversion
 - **Include Links Toggle**: Option to include or strip URLs from links in output (great for reducing token usage)
 - **Smart Content Extraction**: Uses Readability algorithm to focus on main content
 - **Dark/Light Mode**: Toggle between themes with automatic preference persistence
@@ -254,6 +255,7 @@ LLMFeeder/
 │   ├── styles.css             # Styling for the popup UI
 │   ├── content.js             # Content script that runs on web pages
 │   ├── reddit.js              # Reddit-specific extraction (post + comment tree)
+│   ├── motion.js              # Spring + gesture runtime for the UI
 │   └── background.js          # Background script for keyboard shortcuts
 │
 ├── scripts/                   # Build and utility scripts
@@ -272,6 +274,7 @@ LLMFeeder/
 - **popup.html/js/css**: Creates the user interface when you click the extension icon
 - **content.js**: Contains the core functionality to extract and convert web content to Markdown
 - **reddit.js**: Renders Reddit threads and listings from Reddit's own JSON (with a DOM fallback) so comments survive the conversion
+- **motion.js**: Springs, pointer-gesture tracking, momentum projection and press feedback shared by the popup and the in-page notification
 - **background.js**: Handles keyboard shortcuts and global extension functionality
 - **readability.js**: Mozilla's library that identifies and extracts the main content from a webpage
 - **turndown.js**: Converts HTML to Markdown with configurable options

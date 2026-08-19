@@ -39,6 +39,7 @@ git push origin feature/your-feature-name
 **Key Files for Feature Development:**
 - `extension/content.js` - Core conversion logic (main content extraction, markdown)
 - `extension/reddit.js` - Reddit thread/listing extraction (post + comment tree)
+- `extension/motion.js` - Spring + gesture runtime shared by popup and content script
 - `extension/popup.js` - Popup UI and settings handling
 - `extension/popup.html` - UI structure
 - `extension/styles.css` - Styling
@@ -66,6 +67,7 @@ LLMFeeder/
 │   ├── styles.css            # Popup styling
 │   ├── content.js            # Content script (42KB) - CORE LOGIC
 │   ├── reddit.js             # Reddit extractor (JSON API + DOM fallback)
+│   ├── motion.js             # Springs, gesture tracking, press feedback
 │   └── background.js         # Background script for keyboard shortcuts
 │
 ├── scripts/
@@ -103,6 +105,7 @@ Edit files in the `extension/` directory based on your feature:
 | New settings | `popup.js` (add to loadSettings/saveSettings) |
 | Content extraction logic | `content.js` |
 | Reddit post/comment output | `reddit.js` |
+| Motion, gestures, press feedback | `motion.js` |
 | Keyboard shortcuts | `background.js`, `manifest.json` |
 | Permissions | `manifest.json` |
 
@@ -221,6 +224,47 @@ Relevant settings: `redditMode` (default on), `redditCommentSort`
 | `copyToClipboard` | popup.js → content.js |
 | `downloadMarkdown` | popup.js → content.js |
 | `showNotification` | popup.js → content.js |
+
+---
+
+## Interface Design
+
+The UI follows Apple's fluid-interface guidance (WWDC *Designing Fluid
+Interfaces*, *The Details of UI Typography*). Four rules decide most reviews:
+
+1. **Anything the user can touch is spring-driven, never a CSS transition.**
+   `motion.js` owns those values. A transition cannot be grabbed and reversed
+   mid-flight; a spring re-targets from its live value and carries its velocity,
+   which is what makes an interrupted gesture feel continuous. CSS transitions
+   are allowed only for colour, opacity, shadow and the press scale.
+2. **Feedback lands on pointer-down.** `Motion.pressable()` adds `.is-pressed`
+   on `pointerdown`, drops it when the pointer leaves the control (with ~10px of
+   slop) and re-arms it on return. Never wait for `click` to acknowledge a press.
+3. **Gestures track 1:1, then hand off velocity.** `Motion.draggable()` gives
+   pointer capture, a 10px direction threshold and a release velocity;
+   `Motion.project()` picks the landing target from where the flick is going and
+   `Motion.rubberband()` resists past the edges.
+4. **Chrome is a material.** Header, menus and the notification card are
+   translucent layers (`backdrop-filter`) with content passing underneath, and a
+   scroll-edge mask instead of a 1px divider.
+
+`motion.js` API:
+
+| Export | Purpose |
+|--------|---------|
+| `new Spring(value, {damping, response, onUpdate, onRest})` | Apple's parameter pair: `damping` 1.0 = no overshoot, `response` = seconds to approach |
+| `spring.to(target, {velocity})` / `spring.set(value)` | Re-target mid-flight / write directly while a finger is down |
+| `PRESETS` | `move` (1.0/0.4), `sheet` (0.8/0.3), `rotate` (0.8/0.4), `snappy` (1.0/0.28) |
+| `project(velocity)` | Momentum landing point, exponential decay (`d = 0.998`) |
+| `rubberband(overshoot, dimension)` | Progressive boundary resistance |
+| `draggable(el, opts)` / `pressable(root, selector)` | Gesture tracking / press feedback |
+| `prefersReducedMotion()` | Springs land immediately; components cross-fade instead |
+
+Accessibility is part of the component, not a later pass: `styles.css` answers
+`prefers-reduced-motion`, `prefers-reduced-transparency` (frostier, no blur) and
+`prefers-contrast: more` (near-solid surfaces with borders). Type uses the
+platform font with size-specific tracking (tight on large text, open on small
+caps) and rem spacing so the user's text-size setting grows the layout.
 
 ---
 

@@ -6,15 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LLMFeeder</title>
     <link rel="stylesheet" href="styles.css" />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
-    />
   </head>
   <body class="light-theme">
     <div class="popup-wrapper">
       <!-- Main View -->
-      <div id="mainView" class="view active">
+      <div id="mainView" class="view active" aria-hidden="false">
         <div class="container">
           <div class="top-section">
             <header class="header">
@@ -23,22 +19,6 @@
                 <h1>LLMFeeder</h1>
               </div>
               <div class="header-actions">
-                <a href="https://github.com/jatinkrmalik/LLMFeeder/discussions/71" target="_blank" class="icon-btn" title="Help & FAQ">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="1.5"
-                    stroke="currentColor"
-                    class="icon"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
-                    />
-                  </svg>
-                </a>
                 <button id="openSettingsBtn" class="icon-btn" title="Settings">
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -62,9 +42,6 @@
                 </button>
               </div>
             </header>
-            <p id="tagline" class="tagline">
-              Instantly convert any webpage to clean, LLM-ready Markdown. Perfect for ChatGPT, Claude, and more.
-            </p>
           </div>
           <div class="center-section">
             <div class="main-controls">
@@ -129,24 +106,12 @@
                 </button>
               </div>
 
-              <div id="statusIndicator" class="status">Ready</div>
+              <div id="statusIndicator" class="status" role="status" aria-live="polite"></div>
               
               <!-- Token Counter Display -->
               <div id="tokenCounter" class="token-counter hidden">
-                <div class="token-counter-header">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="token-icon">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-                  </svg>
-                  <span class="token-label">Token Count</span>
-                </div>
-                <div class="token-count-display">
-                  <span id="tokenCountValue" class="token-value">--</span>
-                  <span class="token-separator">/</span>
-                  <span id="tokenLimitValue" class="token-limit">4K</span>
-                </div>
-                <div class="token-progress-container">
-                  <div id="tokenProgressBar" class="token-progress-bar"></div>
-                </div>
+                <span id="tokenCountValue" class="token-value">--</span>
+                <span class="token-label">tokens</span>
                 <div id="tokenWarning" class="token-warning hidden"></div>
               </div>
             </div>
@@ -169,20 +134,10 @@
           </div>
         </div>
 
-        <div class="footer">
-          <div>
-            Made with ❤️ by our contributors on
-            <a href="https://github.com/jatinkrmalik/LLMFeeder" target="_blank" class="github-footer-link" title="View on GitHub">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="github-icon">
-                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-              </svg>
-            </a>
-          </div>
-        </div>
       </div>
 
       <!-- Settings View -->
-      <div id="settingsView" class="view">
+      <div id="settingsView" class="view" aria-hidden="true">
         <div class="container">
           <header class="header">
             <button id="backToMainBtn" class="icon-btn" title="Back">
@@ -315,18 +270,6 @@ Source: [{title}]({url})</textarea>
                 <input type="checkbox" id="showTokenCount" checked />
                 <span>Show token count after conversion</span>
               </label>
-              <label class="setting-option">
-                <span>Context Limit:</span>
-                <select id="tokenContextLimit" class="token-limit-select">
-                  <option value="4096">Small (4K)</option>
-                  <option value="8192" selected>Medium (8K)</option>
-                  <option value="16384">Large (16K)</option>
-                  <option value="32768">Extra Large (32K)</option>
-                </select>
-              </label>
-              <small style="display: block; margin-top: 8px; color: var(--text-secondary);">
-                Token count is estimated using GPT-4/Claude tokenizer (cl100k_base)
-              </small>
             </div>
 
             <div class="setting-group">
@@ -404,6 +347,7 @@ Source: [{title}]({url})</textarea>
       </div>
     </div>
     <script src="libs/browser-polyfill.js"></script>
+    <script src="motion.js"></script>
     <script src="libs/jszip.min.js"></script>
     <script src="settings.js"></script>
     <script src="multi-tab-utils.js"></script>

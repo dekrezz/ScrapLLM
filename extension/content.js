@@ -1314,25 +1314,37 @@
     const notification = document.createElement('div');
     notification.className = 'llmfeeder-notification';
 
+    // A translucent floating layer over unknown page content: a heavy dark
+    // material with a strong blur (big surfaces read as thicker), an accent
+    // rail for status instead of a shouting gradient, and vibrancy-grade text
+    // so it stays legible over whatever is underneath. Transform and opacity
+    // are driven by springs below, never by a CSS transition, so the card can
+    // be grabbed and thrown while it is still arriving.
+    const reduceTransparency = matchMedia('(prefers-reduced-transparency: reduce)').matches;
     notification.style.cssText = `
       position: fixed;
-      top: 24px;
-      right: 24px;
-      background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+      top: 20px;
+      right: 20px;
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      background: ${reduceTransparency ? 'rgb(28, 28, 30)' : 'rgba(28, 28, 30, 0.82)'};
       color: #ffffff;
-      border: none;
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(66, 133, 244, 0.2);
-      padding: 20px 24px;
+      border-radius: 16px;
+      box-shadow: 0 20px 56px rgba(0, 0, 0, 0.34), 0 2px 8px rgba(0, 0, 0, 0.2);
+      padding: 16px 44px 16px 18px;
       z-index: 2147483647;
-      max-width: 400px;
-      min-width: 320px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      transform: translateX(100%) scale(0.8);
+      max-width: 380px;
+      min-width: 300px;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      ${reduceTransparency ? '' : '-webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);'}
+      border: 1px solid rgba(255, 255, 255, 0.14);
       opacity: 0;
-      transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+      touch-action: pan-y;
+      cursor: grab;
+      will-change: transform, opacity;
     `;
 
     const contentWrapper = document.createElement('div');
@@ -1360,19 +1372,24 @@
           <path d="M9 12L11 14L15 10M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
+      notification.style.boxShadow += ', inset 3px 0 0 #30d158';
+      iconWrapper.style.color = '#30d158';
     } else if (title.toLowerCase().includes('error') || title.toLowerCase().includes('failed')) {
       iconSVG = `
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M12 9V13M12 17H12.01M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
-      notification.style.background = 'linear-gradient(135deg, #ea4335 0%, #d93025 100%)';
+      notification.style.boxShadow += ', inset 3px 0 0 #ff453a';
+      iconWrapper.style.color = '#ff453a';
     } else {
       iconSVG = `
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M13 16H12V12H11M12 8H12.01M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C16.9706 3 21 7.02944 21 12Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
+      notification.style.boxShadow += ', inset 3px 0 0 #0a84ff';
+      iconWrapper.style.color = '#0a84ff';
     }
     iconWrapper.innerHTML = iconSVG;
 
@@ -1385,19 +1402,22 @@
     const titleElement = document.createElement('div');
     titleElement.textContent = title;
     titleElement.style.cssText = `
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
-      line-height: 1.3;
-      margin: 0 0 4px 0;
+      line-height: 1.25;
+      letter-spacing: -0.012em;
+      margin: 0 0 2px 0;
       color: #ffffff;
     `;
 
     const messageElement = document.createElement('div');
     messageElement.style.cssText = `
-      font-size: 14px;
-      line-height: 1.5;
+      font-size: 13px;
+      font-weight: 450;
+      line-height: 1.45;
+      letter-spacing: 0.002em;
       margin: 0;
-      color: rgba(255, 255, 255, 0.9);
+      color: rgba(255, 255, 255, 0.92);
       word-wrap: break-word;
       white-space: pre-line;
     `;
@@ -1431,8 +1451,17 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.2s ease;
+      transition: background-color 100ms ease-out, color 100ms ease-out, transform 100ms ease-out;
     `;
+    closeButton.addEventListener('pointerdown', () => {
+      closeButton.style.transform = 'scale(0.88)';
+      closeButton.style.backgroundColor = 'rgba(255, 255, 255, 0.16)';
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => {
+      closeButton.addEventListener(type, () => {
+        closeButton.style.transform = 'scale(1)';
+      });
+    });
     closeButton.innerHTML = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -1456,28 +1485,119 @@
     notification.appendChild(closeButton);
 
     document.body.appendChild(notification);
+    animateNotification(notification, closeButton);
+  }
 
-    requestAnimationFrame(() => {
-      notification.style.transform = 'translateX(0) scale(1)';
-      notification.style.opacity = '1';
-    });
+  // Spring-driven presentation for the notification card: it materialises on
+  // the same axis it dismisses on, tracks the finger 1:1 when swiped, and
+  // leaves at the velocity the finger let go with.
+  function animateNotification(notification, closeButton) {
+    const Motion = typeof LLMFeederMotion !== 'undefined' ? LLMFeederMotion : null;
+    const width = notification.getBoundingClientRect().width || 340;
+    const OFFSCREEN = width + 40;
+    let removed = false;
 
-    const removeNotification = () => {
-      notification.style.transform = 'translateX(100%) scale(0.8)';
-      notification.style.opacity = '0';
-      setTimeout(() => {
-        if (notification.parentNode) {
-          notification.parentNode.removeChild(notification);
-        }
-      }, 400);
+    const render = (x, present) => {
+      const travelling = Math.abs(x) > 1;
+      notification.style.transform =
+        `translate3d(${x}px, 0, 0) scale(${0.94 + present * 0.06})`;
+      notification.style.opacity = String(present * (travelling ? 0.92 : 1));
+      // Materialise: the blur resolves as the surface arrives, so it reads as
+      // glass forming rather than a flat fade.
+      if (present < 0.995) {
+        notification.style.filter = `blur(${(1 - present) * 8}px)`;
+      } else {
+        notification.style.filter = 'none';
+      }
     };
 
-    closeButton.addEventListener('click', removeNotification);
+    const destroy = () => {
+      if (notification.parentNode) notification.parentNode.removeChild(notification);
+    };
 
-    const autoRemoveTimeout = setTimeout(removeNotification, 4000);
+    if (!Motion || Motion.prefersReducedMotion()) {
+      // Reduced motion keeps the feedback but drops the travel: a short
+      // cross-fade in place, no slide, no overshoot.
+      notification.style.transition = 'opacity 200ms ease';
+      notification.style.transform = 'none';
+      requestAnimationFrame(() => { notification.style.opacity = '1'; });
+      const dismiss = () => {
+        if (removed) return;
+        removed = true;
+        notification.style.opacity = '0';
+        setTimeout(destroy, 220);
+      };
+      closeButton.addEventListener('click', dismiss);
+      const timeout = setTimeout(dismiss, 4000);
+      closeButton.addEventListener('click', () => clearTimeout(timeout));
+      return;
+    }
 
-    closeButton.addEventListener('click', () => {
-      clearTimeout(autoRemoveTimeout);
+    const presence = new Motion.Spring(0, {
+      damping: Motion.PRESETS.sheet.damping,
+      response: Motion.PRESETS.sheet.response,
+      onUpdate: (value) => render(offset.value, value)
+    });
+    const offset = new Motion.Spring(OFFSCREEN, {
+      damping: Motion.PRESETS.sheet.damping,
+      response: Motion.PRESETS.sheet.response,
+      onUpdate: (value) => render(value, presence.value),
+      onRest: (spring) => {
+        if (removed && Math.abs(spring.value) >= OFFSCREEN - 1) destroy();
+      }
+    });
+
+    render(OFFSCREEN, 0);
+    requestAnimationFrame(() => {
+      offset.to(0, Motion.PRESETS.sheet);
+      presence.to(1, Motion.PRESETS.sheet);
+    });
+
+    const dismiss = (velocity) => {
+      if (removed) return;
+      removed = true;
+      clearTimeout(autoDismiss);
+      offset.to(OFFSCREEN, { ...Motion.PRESETS.sheet, velocity: velocity || 0 });
+      presence.to(0, Motion.PRESETS.snappy);
+      // Belt and braces: if the tab is backgrounded mid-flight the spring stops
+      // ticking, so guarantee removal.
+      setTimeout(destroy, 800);
+    };
+
+    let autoDismiss = setTimeout(() => dismiss(0), 4000);
+    closeButton.addEventListener('click', () => dismiss(0));
+
+    let startX = 0;
+    Motion.draggable(notification, {
+      axis: 'x',
+      canStart: () => !removed,
+      onStart: () => {
+        clearTimeout(autoDismiss);
+        startX = offset.value;
+        notification.style.cursor = 'grabbing';
+      },
+      onMove: ({ delta }) => {
+        // Free to the right (the dismiss direction), resisted to the left.
+        const raw = startX + delta;
+        offset.set(raw >= 0 ? raw : Motion.rubberband(raw, width));
+      },
+      onEnd: ({ delta, velocity, cancelled }) => {
+        notification.style.cursor = 'grab';
+        const current = startX + delta;
+        if (cancelled) {
+          offset.to(0, Motion.PRESETS.sheet);
+          autoDismiss = setTimeout(() => dismiss(0), 4000);
+          return;
+        }
+        // Land where the flick is going, not where the finger stopped.
+        const projected = current + Motion.project(velocity);
+        if (velocity > 200 || projected > width * 0.4) {
+          dismiss(velocity);
+        } else {
+          offset.to(0, { ...Motion.PRESETS.sheet, velocity });
+          autoDismiss = setTimeout(() => dismiss(0), 4000);
+        }
+      }
     });
   }
 
