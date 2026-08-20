@@ -712,6 +712,21 @@
       DebugLog.log('Added lazy load warning', { scrollResult, reason: lazyLoadInfo.reason });
     }
 
+    // Converting a chat page as a page captures whichever messages happen to be
+    // rendered. The popup keeps that action out of the front row for exactly
+    // this reason, but it stays reachable — so when it is used, the output says
+    // what it is instead of passing a slice off as the thread.
+    if (settings.contentScope !== 'chat' && typeof ScrapLLMChat !== 'undefined') {
+      try {
+        if (ScrapLLMChat.inspect().isChat) {
+          appendNotes.push('\n\n---\n> **Note:** This page is a conversation, and only the messages rendered at the time of capture are included — a transcript is loaded in pieces as you scroll. Use Copy Chat for the whole thread.\n');
+          DebugLog.log('Page conversion on a chat page: added partial-transcript note');
+        }
+      } catch (error) {
+        DebugLog.error('Chat probe failed during page conversion', error);
+      }
+    }
+
     const converted = ScrapLLMConvert.convertDocument({
       doc: document,
       url: window.location.href,

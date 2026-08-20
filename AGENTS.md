@@ -67,6 +67,14 @@ scored text heuristic decide code vs prose. Code is emitted verbatim in a fence
 punctuation that makes code readable. Output starts with
 `> Lines A to B of code|text from [host/path](url)`.
 
+On a page that holds a conversation the popup hides the page-conversion key and
+Download switches to the chat scope: a virtualised transcript converted as a page
+is whichever messages happened to be rendered, which is a slice of the middle
+dressed up as a document. The page conversion stays one click away in the chat
+action's menu, because chat detection can be wrong and the page is sometimes what
+the user wants — and when it runs there, the output carries a note saying only the
+rendered messages were captured.
+
 **`chat.js`** — a conversation is a tree, not a list: editing a message
 mid-thread grows a sibling branch and the old one stays in the database. Both
 API paths (`claude.ai` via `chat_conversations?tree=True`, `chatgpt.com` via

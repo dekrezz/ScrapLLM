@@ -111,6 +111,7 @@ const chatAction = document.getElementById("chatAction");
 const copyChatBtn = document.getElementById("copyChatBtn");
 const chatLimitBtn = document.getElementById("chatLimitBtn");
 const chatLimitMenu = document.getElementById("chatLimitMenu");
+const chatPageFallbackBtn = document.getElementById("chatPageFallbackBtn");
 let chatExchangeLimitValue = "10";
 const downloadBtn = document.getElementById("downloadBtn");
 const statusIndicator = document.getElementById("statusIndicator");
@@ -416,6 +417,10 @@ async function initSelectionAction() {
   }
 }
 
+// Set once the popup knows this page holds a conversation: the page-conversion
+// key is hidden and Download follows the chat, not the rendered slice.
+let chatPageFallback = false;
+
 // Chat exchange picker. A native <select> renders as the OS control — wrong
 // arrow, wrong focus ring, wrong colours inside a dark key — so the segment is
 // a caret button with the same materialising menu as the convert split button.
@@ -472,6 +477,14 @@ async function initChatAction() {
     if (!info || !info.isChat) return;
 
     chatAction.classList.remove("hidden");
+
+    // A chat transcript is virtualised: converting the page captures whichever
+    // messages happen to be rendered, which is a slice of the middle dressed up
+    // as a document. So on a chat the page conversion steps off the front row —
+    // it stays one click away inside this action's menu, because a chat
+    // detection can be wrong and the page is sometimes what the user wants.
+    convertSplit.classList.add("hidden");
+    chatPageFallback = true;
   } catch (error) {
     // No content script on this page (store, about:, PDF viewer).
   }
@@ -910,8 +923,12 @@ async function downloadMarkdown() {
       throw new Error("No active tab found");
     }
 
-    // Get current settings
-    const contentScope = document.querySelector('input[name="contentScope"]:checked').value;
+    // Get current settings. On a chat the download follows the same rule the
+    // buttons do: a file full of half a transcript is the same mistake as a
+    // clipboard full of one.
+    const contentScope = chatPageFallback
+      ? "chat"
+      : document.querySelector('input[name="contentScope"]:checked').value;
     const preserveTables = preserveTablesCheckbox.checked;
     const includeImages = includeImagesCheckbox.checked;
     const includeTitle = includeTitleCheckbox.checked;
@@ -1096,6 +1113,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   copySelectionBtn.addEventListener("click", () => convertToMarkdown("selection"));
   copyChatBtn.addEventListener("click", () => convertToMarkdown("chat"));
+  chatPageFallbackBtn.addEventListener("click", () => {
+    closeChatLimitMenu();
+    convertToMarkdown();
+  });
   chatLimitBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     if (isChatLimitMenuOpen()) {

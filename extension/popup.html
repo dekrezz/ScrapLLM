@@ -74,6 +74,11 @@
                     <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="10">Last 10 exchanges</button>
                     <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="25">Last 25 exchanges</button>
                     <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="all">Whole chat</button>
+                    <!-- The page itself is still reachable, one level down: on a
+                         chat it captures only what is rendered, which is why it
+                         is not the front-of-house action here. -->
+                    <div class="menu-separator" role="separator"></div>
+                    <button id="chatPageFallbackBtn" class="split-btn-menu-item" type="button" role="menuitem">Copy the page instead</button>
                   </div>
                 </div>
                 <div id="convertSplit" class="split-btn">
