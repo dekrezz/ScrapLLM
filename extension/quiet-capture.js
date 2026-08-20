@@ -50,6 +50,81 @@ const ScrapLLMQuietCapture = (function() {
     return `Server answered ${status}: the page is not there, and a tab cannot bring it back`;
   }
 
+  // --------------------------------------------------------------------------
+  // Walls: the failures that repeating cannot fix
+  // --------------------------------------------------------------------------
+  //
+  // The ladder above this module (quiet fetch, tab, one delayed retry) exists
+  // for pages that are *flaky*. A wall is not flaky: an active bot challenge,
+  // a credential check that answers the same way every time, a subscription
+  // gate, or bytes that are not a web page at all. Spending a tab and a retry
+  // on one costs the run its budget and gives the user the same sentence three
+  // times, so these are detected here and skipped at once, each with the
+  // category it belongs to.
+
+  // Vendor challenge pages, named by the markers only their interstitial
+  // carries. Measured on live 403 bodies (retailmenot.com, telegramchannels.me
+  // and pcmag.com all answered a background fetch with the same Cloudflare
+  // interstitial: a 5.7 KB body, "Just a moment..." as its title, and
+  // `cdn-cgi/challenge-platform` plus `__cf_chl` inside).
+  const CHALLENGE_MARKERS = [
+    { pattern: /cdn-cgi\/challenge-platform|__cf_chl|_cf_chl_opt|cf-browser-verification/i, vendor: 'Cloudflare' },
+    { pattern: /challenges\.cloudflare\.com/i, vendor: 'Cloudflare' },
+    { pattern: /captcha-delivery\.com|datadome/i, vendor: 'DataDome' },
+    { pattern: /px-captcha|perimeterx|_pxhd|captcha\.px-cloud\.net/i, vendor: 'PerimeterX' },
+    { pattern: /geo\.captcha-delivery|imperva|incapsula/i, vendor: 'Imperva' }
+  ];
+
+  // Generic CAPTCHA widgets. A contact form on a real article embeds these too,
+  // so on their own they decide nothing: they count as a challenge only when
+  // the response is also a short body or a non-2xx status, which is what an
+  // interstitial actually is.
+  const CAPTCHA_MARKERS =
+    /(hcaptcha\.com\/1\/api\.js|www\.google\.com\/recaptcha\/api\.js|g-recaptcha|h-captcha)/i;
+  const CHALLENGE_BODY_MAX_BYTES = 60000;
+
+  // A gate whose answer does not change when it is asked again from the same
+  // browser without a session.
+  const REPEATED_BLOCK_STATUSES = [401, 403, 429];
+
+  // A subscription gate. Unlike a login wall, the user's own session does not
+  // open it — a tab renders the same offer page — so this never escalates.
+  const PAYWALL_MARKERS =
+    /(subscribe to (?:continue|read)|subscription required|to continue reading|this (?:article|content) is for subscribers|paywall|piano\.io|"isAccessibleForFree"\s*:\s*(?:"|)?false)/i;
+
+  // A credential or consent gate. This one *can* open in the user's own tab,
+  // so it is a wall only once the tab has already been spent on it.
+  const LOGIN_WALL_MARKERS =
+    /(type=["']password["']|sign in to (?:continue|view|read)|log ?in to (?:continue|view|read)|please (?:sign in|log ?in)|accept (?:all )?cookies|consent to (?:the use of )?cookies|manage your (?:cookie )?preferences)/i;
+
+  function challengeVendor(html) {
+    const body = String(html || '');
+    for (const marker of CHALLENGE_MARKERS) {
+      if (marker.pattern.test(body)) return marker.vendor;
+    }
+    return null;
+  }
+
+  // The verbatim reason this response is an active bot challenge, or null.
+  function botChallengeReason(html, status) {
+    const body = String(html || '');
+    if (!body) return null;
+    const vendor = challengeVendor(body);
+    if (vendor) {
+      return `Blocked by a ${vendor} bot challenge, which a background capture cannot answer`;
+    }
+    const corroborated = body.length <= CHALLENGE_BODY_MAX_BYTES ||
+      (Number.isFinite(status) && (status < 200 || status > 299));
+    if (corroborated && CAPTCHA_MARKERS.test(body)) {
+      return 'Blocked by a CAPTCHA gate, which a background capture cannot answer';
+    }
+    return null;
+  }
+
+  function repeatedBlockMessage(status) {
+    return `Server answered ${status} again after a retry: this site refuses automated access`;
+  }
+
   const TEXT_TYPES = ['text/plain', 'text/markdown', 'text/x-markdown'];
   const HTML_TYPES = ['text/html', 'application/xhtml+xml'];
 
@@ -313,7 +388,7 @@ const ScrapLLMQuietCapture = (function() {
     // session attached, so this is a rejection rather than an escalation.
     const blocked = privateDestinationReason(url);
     if (blocked) {
-      return { decision: 'reject', reason: blocked };
+      return { decision: 'reject', reason: blocked, category: 'unusable' };
     }
 
     // The Reddit and X extractors read a live page (Reddit's JSON is fetched
@@ -321,64 +396,113 @@ const ScrapLLMQuietCapture = (function() {
     // fetched copy of the HTML would silently drop the discussion. Say so and
     // open a tab rather than return a post without its comments.
     if (config.redditMode !== false && /(^|\.)reddit\.com$/.test(host)) {
-      return { decision: 'render', reason: "Reddit's comment tree needs the page's own session, so a tab was opened" };
+      return {
+        decision: 'render',
+        reason: "Reddit's comment tree needs the page's own session, so a tab was opened",
+        category: null
+      };
     }
     // The same host test x.js uses, so every URL its extractor would claim on a
     // live page escalates here: www.x.com, mobile.twitter.com and the bare
     // hosts all serve the same posts, and a fetched copy of any of them loses
     // the thread.
     if (config.xMode !== false && /(^|\.)(x\.com|twitter\.com)$/.test(host)) {
-      return { decision: 'render', reason: 'X timelines are virtualised, so a tab was opened' };
+      return {
+        decision: 'render',
+        reason: 'X timelines are virtualised, so a tab was opened',
+        category: null
+      };
     }
     return null;
   }
 
   // Rules a–d: everything decidable from the response alone.
-  function classifyResponse(result, requestedUrl) {
+  //
+  // Every verdict carries three things now: the `decision` the caller acts on,
+  // the verbatim `reason`, and a `category` saying what kind of failure it was.
+  // The category is what the ladder above reads: 'transient' earns the delayed
+  // retry, 'wall' and 'unusable' never do.
+  //
+  // `context` is what this source has already been through:
+  //   { seenStatuses: [403], attempt: 2 }
+  function classifyResponse(result, requestedUrl, context) {
+    const history = context || {};
+    const seen = history.seenStatuses || [];
+
     if (!result) {
-      return { decision: 'reject', reason: 'No response' };
+      return { decision: 'reject', reason: 'No response', category: 'unusable' };
     }
 
     if (result.kind === 'networkError') {
-      return { decision: 'reject', reason: result.message };
+      // A blip, a reset, a DNS hiccup or the 10 s timeout. This is exactly the
+      // failure a second attempt is for.
+      return { decision: 'reject', reason: result.message, category: 'transient' };
     }
 
     if (result.kind === 'blocked') {
-      return { decision: 'reject', reason: result.reason };
+      return { decision: 'reject', reason: result.reason, category: 'unusable' };
     }
 
     if (result.kind === 'tooLarge') {
-      return { decision: 'reject', reason: tooLargeMessage(result.bytes) };
+      return { decision: 'reject', reason: tooLargeMessage(result.bytes), category: 'unusable' };
     }
 
     if (result.kind === 'nonHtml') {
       if (result.contentType === 'application/pdf') {
-        return { decision: 'reject', reason: PDF_MESSAGE };
+        return { decision: 'reject', reason: PDF_MESSAGE, category: 'unusable' };
       }
       if (!result.contentType) {
         return {
           decision: 'reject',
-          reason: 'Server did not say what it sent, and it does not open like a web page'
+          reason: 'Server did not say what it sent, and it does not open like a web page',
+          category: 'unusable'
         };
       }
-      return { decision: 'reject', reason: `Not a web page: ${result.contentType}` };
+      return {
+        decision: 'reject',
+        reason: `Not a web page: ${result.contentType}`,
+        category: 'unusable'
+      };
     }
 
     if (result.kind === 'text') {
       if (DEAD_STATUSES.includes(result.status)) {
-        return { decision: 'reject', reason: deadStatusMessage(result.status) };
+        return { decision: 'reject', reason: deadStatusMessage(result.status), category: 'unusable' };
       }
       if (result.status < 200 || result.status > 299) {
-        return { decision: 'render', reason: `Server answered ${result.status}, so a tab was opened` };
+        return {
+          decision: 'render',
+          reason: `Server answered ${result.status}, so a tab was opened`,
+          category: 'transient'
+        };
       }
-      return { decision: 'use', reason: null };
+      return { decision: 'use', reason: null, category: null };
+    }
+
+    // An active bot challenge is a wall on any status: the interstitial is the
+    // whole body, the run has nothing to capture from it, and the same request
+    // a second later answers the same way.
+    const challenge = botChallengeReason(result.html, result.status);
+    if (challenge) {
+      return { decision: 'reject', reason: challenge, category: 'wall' };
     }
 
     if (result.kind === 'httpError') {
       if (DEAD_STATUSES.includes(result.status)) {
-        return { decision: 'reject', reason: deadStatusMessage(result.status) };
+        return { decision: 'reject', reason: deadStatusMessage(result.status), category: 'unusable' };
       }
-      return { decision: 'render', reason: `Server answered ${result.status}, so a tab was opened` };
+      // A credential check answers a credential-less fetch the same way every
+      // time. The first one still escalates — the user's own tab carries the
+      // session this fetch deliberately does not — but once the same status has
+      // come back twice, asking a third time is only spending the budget.
+      if (REPEATED_BLOCK_STATUSES.includes(result.status) && seen.includes(result.status)) {
+        return { decision: 'reject', reason: repeatedBlockMessage(result.status), category: 'wall' };
+      }
+      return {
+        decision: 'render',
+        reason: `Server answered ${result.status}, so a tab was opened`,
+        category: 'transient'
+      };
     }
 
     // A wall is a wall whether or not the host changed: /article redirecting to
@@ -399,41 +523,88 @@ const ScrapLLMQuietCapture = (function() {
       const hostChanged = requestedHost && requestedHost !== finalHost;
       if ((hostChanged && WALL_PATTERN.test(finalHost)) || WALL_PATTERN.test(path)) {
         const where = hostChanged ? finalHost : `${finalHost}${path}`;
-        return { decision: 'render', reason: `Redirected to ${where}, so a tab was opened` };
+        return {
+          decision: 'render',
+          reason: `Redirected to ${where}, so a tab was opened`,
+          category: 'wall'
+        };
       }
     }
 
-    return { decision: 'use', reason: null };
+    return { decision: 'use', reason: null, category: null };
   }
 
   // Rules e–f: what only the parsed document can answer.
   // `extraction` is what convert-core's convertHtml returns, or
   // { failed: true, error } when the parse threw.
-  function classifyExtraction(extraction) {
+  //
+  // `context` carries the response the extraction came from —
+  // { html, status, attempt } — because a page with nothing in it is a
+  // different event depending on what the HTML around the nothing says.
+  function classifyExtraction(extraction, context) {
+    const history = context || {};
+    const html = history.html || '';
+
     if (!extraction || extraction.failed) {
       const detail = (extraction && extraction.error) || 'unknown error';
+      // A challenge page has no article for Readability to find, so the parse
+      // failing is often the *first* thing that happens to it. Name the wall
+      // rather than the parser.
+      const challenge = botChallengeReason(html, history.status);
+      if (challenge) {
+        return { decision: 'reject', reason: challenge, category: 'wall' };
+      }
       return {
         decision: 'render',
-        reason: `Server-rendered HTML could not be converted (${detail}), so a tab was opened`
+        reason: `Server-rendered HTML could not be converted (${detail}), so a tab was opened`,
+        category: 'transient'
       };
     }
 
     if (extraction.emptyAppShell && extraction.bodyTextLength < MIN_BODY_TEXT_CHARS) {
       return {
         decision: 'render',
-        reason: 'Page is rendered by JavaScript, so a tab was opened'
+        reason: 'Page is rendered by JavaScript, so a tab was opened',
+        category: 'transient'
       };
     }
 
     const textLength = extraction.textLength || 0;
     if (textLength < MIN_TEXT_CHARS) {
+      // A subscription gate is not opened by a rendering engine: the tab shows
+      // the same offer page, and the run files the offer as the article. It is
+      // a wall on the first sight of it.
+      if (PAYWALL_MARKERS.test(html)) {
+        return {
+          decision: 'reject',
+          reason: 'Hard paywall: the page offered a subscription instead of the article',
+          category: 'wall'
+        };
+      }
+      // A login or consent gate *can* open in the user's own tab, which is
+      // why the first one still escalates. Once the tab has been spent and the
+      // page came back the same way, it is a wall and gets no retry.
+      if (LOGIN_WALL_MARKERS.test(html)) {
+        return (history.attempt || 1) > 1
+          ? {
+            decision: 'reject',
+            reason: 'Login or consent wall: the page yielded no article, in a tab either',
+            category: 'wall'
+          }
+          : {
+            decision: 'render',
+            reason: 'Page asked for a login or a consent choice, so a tab was opened',
+            category: 'wall'
+          };
+      }
       return {
         decision: 'render',
-        reason: `Server-rendered text was only ${textLength} characters, so a tab was opened`
+        reason: `Server-rendered text was only ${textLength} characters, so a tab was opened`,
+        category: 'transient'
       };
     }
 
-    return { decision: 'use', reason: null };
+    return { decision: 'use', reason: null, category: null };
   }
 
   return {
@@ -443,6 +614,8 @@ const ScrapLLMQuietCapture = (function() {
     MAX_BYTES,
     PDF_MESSAGE,
     DEAD_STATUSES,
+    REPEATED_BLOCK_STATUSES,
+    botChallengeReason,
     privateDestinationReason,
     fetchSource,
     preflight,

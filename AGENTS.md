@@ -208,6 +208,116 @@ One question in, one Markdown file out. Two stages, both in the background:
    preferences — it is a preference, not a per-run choice, so it does not sit
    in the run sheet next to the source count.
 
+### The ladder, the walls and the junk filter
+
+A source is no longer captured once and dropped if that fails. `research.js`
+runs a ladder, per source, with its own attempt budget:
+
+1. the quiet fetch,
+2. a background tab, when the fetched HTML cannot answer for the page,
+3. one delayed retry of both, jittered (`RETRY_BASE_DELAY_MS` +
+   0–`RETRY_JITTER_MS`, so three workers that all met the same rate limiter do
+   not come back together),
+4. giving up, with both halves of the story in one sentence: `<first failure>;
+   the retry 3 s later failed too: <second failure>`.
+
+`MAX_ATTEMPTS_PER_SOURCE` is 2 and there is no third pass. The run's own
+4-minute budget is never extended for persistence: a retry is only started when
+the delay *plus* a whole capture still fits (`RETRY_MIN_REMAINING_MS`), so a
+slow tail comes back as the failure the user needed to read rather than as the
+budget message. A source that only worked the second time says so, in the
+document and on the row, because the first failure is part of what that capture
+is.
+
+Which failures earn the retry is not a guess — every verdict from
+`quiet-capture.js` now carries a `category` next to its `decision` and its
+verbatim `reason`:
+
+| Category | Meaning | Retried? |
+|----------|---------|----------|
+| `transient` | network failure, timeout, 5xx, an unrendered page, a tab that never became scriptable | yes |
+| `wall` | an active bot challenge, a repeated 401/403/429, a hard paywall, a login or consent wall that yielded nothing in a tab either | no |
+| `unusable` | a private destination, a PDF or other non-HTML type, a body over `MAX_BYTES`, a 404/410 | no |
+| `junk` / `duplicate` | the quality gate dropped it | no |
+
+A `wall` row reads as `skipped` rather than `error`: the page did not fail to
+be captured, it refused to be, which is the same kind of event as a page the
+quality gate drops. `unusable` keeps `error`, because a PDF or a private
+address is a source the run could never have used.
+
+The wall detectors extend the signals that were already measured rather than
+duplicating them. `botChallengeReason` matches the vendor markers a challenge
+page carries and nothing else does (`cdn-cgi/challenge-platform`, `__cf_chl`,
+`challenges.cloudflare.com`, `captcha-delivery.com`/DataDome, `px-captcha`,
+Imperva/Incapsula); a *generic* hCaptcha or reCAPTCHA script counts only when
+the response corroborates it — a body under 60 KB or a non-2xx status — because
+a real article with a reCAPTCHA on its contact form is a page, not a gate. This
+is measured, not assumed: fetching `retailmenot.com`, `telegramchannels.me` and
+`pcmag.com` from the background returned the same 5.7 KB Cloudflare
+interstitial, titled "Just a moment...", with no article in it at all — the
+kind of page the old rules would have handed a tab and then filed as a thin
+capture.
+
+The 401/403/429 rule is deliberately split: the *first* one still escalates,
+because the user's own tab carries the session this fetch does not; a *repeat*
+of the same status is a wall and gets no third request (`seenStatuses` is what
+the source has already been answered with, and it is recorded before the
+classification runs). A hard paywall is a wall on first sight — the tab renders
+the same offer page — while a login or consent gate is given its one tab and is
+called a wall only once that tab has been spent (`attempt > 1`).
+
+`source-quality.js` is the junk filter: pure, background-only, Markdown in,
+verdict out. It scores the *captured Markdown*, which is the same artefact on
+both paths, so a page is judged by what the run would actually hand to the
+model. The signals are ad-and-promo phrase density, call-to-action density,
+link-text share and links per 100 words, affiliate-shaped link targets,
+repeated-line share, how much of the page is written in paragraphs at all,
+thin content, heading-to-substance ratio, and overlap with the user's query.
+Points accumulate and a page is dropped at `JUNK_SCORE_THRESHOLD` (100); no
+single signal reaches it except a paid-signal/VIP-channel pitch seen twice, so
+a rejection always rests on at least two independent measurements. Near
+duplicates are caught with 6-word shingles hashed FNV-1a and compared by
+Jaccard against everything already kept in the run.
+
+Two non-signals, stated because they are what a naive filter gets wrong: **a
+short page is not spam** (thinness tops out at 35 points, well under the
+threshold — a 60-word release note is exactly the source a run wants), and **a
+price is not spam** (money is not measured at all; promotional *phrasing* is,
+so a pricing page and a hardware review survive).
+
+The thresholds were calibrated on real pages, captured through the extension's
+own Readability + Turndown path: 10 live affiliate/coupon and paid-signal
+landings against 14 live genuine pages (MDN, Wikipedia, the Rust book, CPython
+and SQLite release notes, PostgreSQL's announcement, tokio's tutorial, curl's
+changelog, Proton's pricing page, TechRadar's VPN deals page). Every one of the
+8 spam pages that converted at all was rejected (scores 100–135); the other two
+never converted, because they *were* the Cloudflare interstitial the wall
+classifier now names. No genuine page was rejected: the highest scored 70
+(curl's changelog — 136k words, 53% link text) and the next 55 (Proton's
+pricing page). The duplicate threshold sits in an equally wide gap: the only
+mirror pair in the corpus scored 0.937 and every other pair scored under 0.02,
+including two encyclopedia articles on the same subject.
+
+Discovery keeps what it ranked but did not need: `filterAndRank` returns
+`reserves` alongside `results`, and the engine promotes one whenever a source
+ends without a capture — skipped at a wall, dropped as junk, or failed after
+its retry — until the reserve pool is empty or there is not enough budget left
+to capture anything with (`REPLACEMENT_MIN_REMAINING_MS`). That is why
+`MultiTabUtils.runPool` compares its cursor against the *live* length of the
+item list and parks an idle worker on a promise woken by the next worker to
+finish, instead of returning: the queue can grow while the pool runs, and the
+wait must not need a timer.
+
+Nothing disappears. A drop, a skip and a failed retry all keep their verbatim
+reason, and all three land in the run state (with `category`, `attempts` and
+`replacement` on the row) and in the document's `### Not fetched` block. The
+front matter states whether the filter was on, how many pages it dropped, and
+how many replacements were pulled in.
+
+`researchJunkFilter` (default on) is the whole control surface for the gate:
+one setting, not a knob per threshold, because the thresholds are measurements
+rather than preferences.
+
 Brave Search was rejected as a fallback (rate limited after a handful of
 queries, build-hashed class names) and the Google News RSS recency booster was
 rejected because its links only resolve inside a real tab. Recency is `&df=d` on
@@ -268,6 +378,10 @@ what has to be closed in that case.
 | `MAX_BYTES` (one fetched body) | 5242880 |
 | `PROGRESS_THROTTLE_MS` / `RESULT_RETENTION_MS` | 250 / 600000 |
 | `MAX_PERSIST_BYTES` | 5242880 |
+| `MAX_ATTEMPTS_PER_SOURCE` | 2 (one pass, one delayed retry) |
+| `RETRY_BASE_DELAY_MS` / `RETRY_JITTER_MS` | 3000 / 2000 |
+| `RETRY_MIN_REMAINING_MS` / `REPLACEMENT_MIN_REMAINING_MS` | 40000 / 45000 |
+| `JUNK_SCORE_THRESHOLD` / `DUPLICATE_JACCARD` (source-quality.js) | 100 / 0.75 |
 
 Every constant above is a guard, not a preference. 20 s of ping polling is what
 separates "the page is slow" from "nothing will ever run here" (a PDF in the

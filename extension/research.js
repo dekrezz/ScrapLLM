@@ -62,6 +62,23 @@ const ScrapLLMResearch = (function() {
   const CANCELLED_MESSAGE = 'Cancelled by user';
   const BUDGET_MESSAGE = 'Skipped: the run exceeded the 4-minute budget';
 
+  // The ladder, and its budget. A source gets one full pass (quiet fetch, then
+  // a tab if the fetch cannot answer for the page) and, when that pass failed
+  // for a reason a second attempt could plausibly fix, exactly one more pass a
+  // few seconds later. Two passes, never more: persistence is for a blip, and
+  // the run's own 4-minute budget belongs to every other source as much as to
+  // this one.
+  const MAX_ATTEMPTS_PER_SOURCE = 2;
+  // Jittered so three workers that all met the same rate limiter do not come
+  // back at the same instant and meet it again together.
+  const RETRY_BASE_DELAY_MS = 3000;
+  const RETRY_JITTER_MS = 2000;
+  // A retry that cannot finish is worse than no retry: it spends the delay and
+  // then reports the budget instead of the failure the user needed to read.
+  const RETRY_MIN_REMAINING_MS = 40000;
+  // A replacement is a whole capture, so it needs more room than a retry.
+  const REPLACEMENT_MIN_REMAINING_MS = 45000;
+
   let api = null;
   let store = null;
   let storeAnnounced = false;
@@ -116,6 +133,9 @@ const ScrapLLMResearch = (function() {
       filename: null,
       quiet: 0,
       rendered: 0,
+      dropped: 0,
+      replacements: 0,
+      reservesLeft: 0,
       resultsTooLargeToPersist: false,
       error: null,
       entries: [],
@@ -157,6 +177,11 @@ const ScrapLLMResearch = (function() {
       // (3 without a tab, 3 rendered in one)" add up to the wrong number.
       quiet: entries.filter(e => e.status === 'ok' && e.path === 'quiet').length,
       rendered: entries.filter(e => e.status === 'ok' && e.path === 'rendered').length,
+      // Dropped by the quality gate rather than by a failure to fetch, and how
+      // many candidates are still in reserve behind them.
+      dropped: entries.filter(e => e.category === 'junk' || e.category === 'duplicate').length,
+      replacements: entries.filter(e => e.replacement).length,
+      reservesLeft: state.reserves ? state.reserves.length : 0,
       resultsTooLargeToPersist: state.resultsTooLargeToPersist,
       error: state.error,
       entries: entries.map(e => ({
@@ -173,7 +198,15 @@ const ScrapLLMResearch = (function() {
         pathReason: e.pathReason || null,
         // A kept-but-thin quiet capture. The row says so too, so a 600
         // character page cannot read like a whole article in the sheet.
-        thinNote: e.thinNote || null
+        thinNote: e.thinNote || null,
+        // What kind of failure this was ('transient', 'wall', 'unusable',
+        // 'junk', 'duplicate'), how many passes it took, and whether this row
+        // is itself a replacement pulled in for a dropped source. The popup
+        // shows the reason verbatim either way; the category is what lets it
+        // group "blocked" apart from "failed".
+        category: e.category || null,
+        attempts: e.attempts || 0,
+        replacement: Boolean(e.replacement)
       })),
       rejected: state.rejected
     };
@@ -567,11 +600,12 @@ const ScrapLLMResearch = (function() {
     entry.note = note;
   }
 
-  function skipResult(source, message) {
+  function skipResult(source, message, category) {
     return {
       success: false,
       tab: { id: null, url: source.url, title: source.url },
       error: message,
+      category: category || null,
       notes: []
     };
   }
@@ -584,24 +618,36 @@ const ScrapLLMResearch = (function() {
   //   { outcome: 'captured', result }  the source is done, no tab was involved
   //   { outcome: 'rejected', message } no tab could help either — fail loudly
   //   { outcome: 'render', reason }    hand this source to the tab path
-  async function captureQuietly(source, entry, run) {
+  async function captureQuietly(source, entry, run, history) {
+    const attempts = history || { seenStatuses: [], attempt: 1 };
     const preflight = ScrapLLMQuietCapture.preflight(source.url, run.remoteSettings);
     if (preflight) {
       // Preflight can also refuse outright — a private address is not a page a
       // tab could capture any more safely than a fetch could.
       return preflight.decision === 'reject'
-        ? { outcome: 'rejected', message: preflight.reason }
-        : { outcome: 'render', reason: preflight.reason };
+        ? { outcome: 'rejected', message: preflight.reason, category: preflight.category || 'unusable' }
+        : { outcome: 'render', reason: preflight.reason, category: preflight.category || null };
     }
 
     const response = await ScrapLLMQuietCapture.fetchSource(source.url, {
       signal: run.controller.signal
     });
-    if (run.cancelled) return { outcome: 'rejected', message: CANCELLED_MESSAGE };
+    if (run.cancelled) {
+      return { outcome: 'rejected', message: CANCELLED_MESSAGE, category: 'cancelled' };
+    }
+    // What this source has already been answered with, so a status that keeps
+    // coming back can be told apart from one that happened once.
+    if (response && Number.isFinite(response.status)) {
+      attempts.seenStatuses.push(response.status);
+    }
 
-    const verdict = ScrapLLMQuietCapture.classifyResponse(response, source.url);
-    if (verdict.decision === 'render') return { outcome: 'render', reason: verdict.reason };
-    if (verdict.decision === 'reject') return { outcome: 'rejected', message: verdict.reason };
+    const verdict = ScrapLLMQuietCapture.classifyResponse(response, source.url, attempts);
+    if (verdict.decision === 'render') {
+      return { outcome: 'render', reason: verdict.reason, category: verdict.category };
+    }
+    if (verdict.decision === 'reject') {
+      return { outcome: 'rejected', message: verdict.reason, category: verdict.category };
+    }
 
     const finalUrl = response.finalUrl || source.url;
     let markdown;
@@ -620,7 +666,8 @@ const ScrapLLMResearch = (function() {
       if (textLength < ScrapLLMQuietCapture.MIN_TEXT_CHARS) {
         return {
           outcome: 'render',
-          reason: `Server-rendered text was only ${textLength} characters, so a tab was opened`
+          reason: `Server-rendered text was only ${textLength} characters, so a tab was opened`,
+          category: 'transient'
         };
       }
     } else {
@@ -634,8 +681,17 @@ const ScrapLLMResearch = (function() {
         ? converted.result
         : { failed: true, error: converted.error };
 
-      const check = ScrapLLMQuietCapture.classifyExtraction(extraction);
-      if (check.decision === 'render') return { outcome: 'render', reason: check.reason };
+      const check = ScrapLLMQuietCapture.classifyExtraction(extraction, {
+        html: response.html,
+        status: response.status,
+        attempt: attempts.attempt || 1
+      });
+      if (check.decision === 'render') {
+        return { outcome: 'render', reason: check.reason, category: check.category };
+      }
+      if (check.decision === 'reject') {
+        return { outcome: 'rejected', message: check.reason, category: check.category };
+      }
 
       markdown = extraction.markdown;
       title = extraction.title || source.title;
@@ -771,6 +827,10 @@ const ScrapLLMResearch = (function() {
         ? CANCELLED_MESSAGE
         : (escalationReason ? `${escalationReason}, and then: ${message}` : message);
 
+      // A tab that timed out, was closed under us or never answered is the
+      // transient half of the ladder: this is exactly the failure a second
+      // pass a few seconds later can come back from.
+      entry.category = cancelled ? 'cancelled' : 'transient';
       markEntry(entry, cancelled ? 'skipped' : 'error', reason);
       broadcast(false);
 
@@ -780,6 +840,7 @@ const ScrapLLMResearch = (function() {
         error: reason,
         path: 'rendered',
         pathReason: escalationReason || null,
+        category: entry.category,
         notes: []
       };
     } finally {
@@ -795,50 +856,22 @@ const ScrapLLMResearch = (function() {
   // Per-source pipeline
   // --------------------------------------------------------------------------
 
-  async function fetchOne(source, index, run) {
-    const entry = run.entries[index];
-
-    if (run.cancelled) {
-      markEntry(entry, 'skipped', CANCELLED_MESSAGE);
-      broadcast(false);
-      return skipResult(source, CANCELLED_MESSAGE);
-    }
-
-    if (Date.now() > run.deadline) {
-      markEntry(entry, 'skipped', BUDGET_MESSAGE);
-      broadcast(false);
-      return skipResult(source, BUDGET_MESSAGE);
-    }
-
-    // Both paths, not just the quiet one: a URL naming the user's own machine
-    // or LAN is not captured at all, and opening it in a tab would perform the
-    // same request with the user's session attached.
-    const blocked = ScrapLLMQuietCapture.privateDestinationReason(source.url);
-    if (blocked) {
-      markEntry(entry, 'error', blocked);
-      broadcast(false);
-      return {
-        success: false,
-        tab: { id: null, url: source.url, title: source.title || source.url },
-        error: blocked,
-        notes: []
-      };
-    }
-
-    markEntry(entry, 'fetching', 'Fetching');
-    broadcast(false);
-
+  // One full pass over one source: the quiet fetch, and the tab it escalates to
+  // when the fetched HTML cannot answer for the page. Resolves with the same
+  // result shape the pool collects, and never throws.
+  async function attemptCapture(source, entry, run, history) {
     let escalationReason = null;
 
     if (run.strategy === 'quiet') {
       let quiet;
       try {
-        quiet = await captureQuietly(source, entry, run);
+        quiet = await captureQuietly(source, entry, run, history);
       } catch (error) {
         // The quiet path is not allowed to take a source down with it: an
         // unexpected failure here is an escalation, with its own reason.
         quiet = {
           outcome: 'render',
+          category: 'transient',
           reason: 'The quiet capture failed (' +
             ((error && error.message) || String(error)) + '), so a tab was opened'
         };
@@ -848,9 +881,14 @@ const ScrapLLMResearch = (function() {
 
       if (quiet.outcome === 'rejected') {
         const cancelled = run.cancelled || quiet.message === CANCELLED_MESSAGE;
-        markEntry(entry, cancelled ? 'skipped' : 'error', quiet.message);
         entry.path = 'quiet';
         entry.pathReason = null;
+        entry.category = cancelled ? 'cancelled' : (quiet.category || 'unusable');
+        // A wall was not a failure to capture, it was a refusal to be
+        // captured, and the row says so: 'skipped', like the sources the
+        // quality gate drops, rather than 'error'.
+        const walled = entry.category === 'wall';
+        markEntry(entry, (cancelled || walled) ? 'skipped' : 'error', quiet.message);
         broadcast(false);
         return {
           success: false,
@@ -858,29 +896,234 @@ const ScrapLLMResearch = (function() {
           error: quiet.message,
           path: 'quiet',
           pathReason: null,
+          category: entry.category,
           notes: []
         };
       }
 
-      // Cancellation is checked again here, not only at the top of this
-      // function: the quiet capture was awaiting a fetch or a parse while the
-      // user pressed Cancel, and an escalation decided in that window would
-      // open a tab *because* the run was being torn down.
+      // Cancellation is checked again here, not only at the top of fetchOne:
+      // the quiet capture was awaiting a fetch or a parse while the user
+      // pressed Cancel, and an escalation decided in that window would open a
+      // tab *because* the run was being torn down.
       if (run.cancelled) {
         markEntry(entry, 'skipped', CANCELLED_MESSAGE);
         entry.path = 'quiet';
+        entry.category = 'cancelled';
         broadcast(false);
-        return skipResult(source, CANCELLED_MESSAGE);
+        return skipResult(source, CANCELLED_MESSAGE, 'cancelled');
       }
 
       escalationReason = quiet.reason;
       entry.pathReason = escalationReason;
+      entry.category = quiet.category || null;
       markEntry(entry, 'fetching', 'Opening a tab');
       broadcast(false);
     }
 
     entry.path = 'rendered';
     return await captureInTab(source, entry, run, escalationReason);
+  }
+
+  // --------------------------------------------------------------------------
+  // The ladder
+  // --------------------------------------------------------------------------
+
+  // Which failures are worth a second pass. A wall is not one of them, and
+  // neither is a body that can never be a web page: those already said what
+  // they were, and repeating them spends the run's budget to print the same
+  // sentence twice. Everything transient — a reset connection, a 10 s timeout,
+  // a 5xx, a page that would not render in the tab in time — earns the retry.
+  function retryableCategory(category) {
+    return category === 'transient' || category === null || category === undefined;
+  }
+
+  function retryDelay() {
+    return RETRY_BASE_DELAY_MS + Math.floor(Math.random() * RETRY_JITTER_MS);
+  }
+
+  // --------------------------------------------------------------------------
+  // The quality gate
+  // --------------------------------------------------------------------------
+
+  // A capture that succeeded technically still has to be worth reading. The
+  // scorer sees the Markdown the run would hand to the model — the same
+  // artefact on both paths — plus the fingerprints of everything already kept,
+  // so a syndicated copy of a page already in the document is caught too.
+  function applyQualityGate(result, source, entry, run) {
+    if (!run.junkFilter || !result || !result.success) return result;
+    if (typeof ScrapLLMSourceQuality === 'undefined') return result;
+
+    const verdict = ScrapLLMSourceQuality.assess({
+      markdown: result.markdown,
+      query: run.query,
+      url: result.tab.url || source.url,
+      previous: run.accepted
+    });
+
+    if (verdict.verdict === 'keep') {
+      // Registered only on the way through, so a rejected page cannot become
+      // the thing later pages are compared against.
+      run.accepted.push({
+        host: source.host,
+        url: result.tab.url || source.url,
+        fingerprint: verdict.fingerprint
+      });
+      return result;
+    }
+
+    entry.category = verdict.category;
+    entry.tokenCount = 0;
+    entry.notes = [];
+    entry.thinNote = null;
+    markEntry(entry, 'skipped', verdict.reason);
+    broadcast(false);
+
+    return {
+      success: false,
+      tab: { id: null, url: result.tab.url || source.url, title: result.tab.title || source.title },
+      error: verdict.reason,
+      path: result.path,
+      pathReason: result.pathReason || null,
+      category: verdict.category,
+      notes: []
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Replacement
+  // --------------------------------------------------------------------------
+
+  // A dropped source does not shrink the result. Discovery keeps the candidates
+  // it ranked but did not need, and one of them is promoted whenever a source
+  // ends without a capture — until the pool is empty or there is no longer
+  // enough of the run's budget to capture anything with.
+  function queueReplacement(run) {
+    if (run.cancelled) return null;
+    if (!run.reserves || run.reserves.length === 0) return null;
+    if (Date.now() > run.deadline - REPLACEMENT_MIN_REMAINING_MS) return null;
+
+    // How many sources could still become a capture: everything queued minus
+    // everything that has already ended without one.
+    const lost = run.entries.filter(e => e.status === 'error' || e.status === 'skipped').length;
+    if (run.entries.length - lost >= run.targetCount) return null;
+
+    const next = run.reserves.shift();
+    run.sources.push(next);
+    run.entries.push({
+      url: next.url,
+      host: next.host,
+      title: next.title,
+      status: 'pending',
+      note: 'Queued in place of a dropped source',
+      tokenCount: 0,
+      notes: [],
+      replacement: true
+    });
+    broadcast(false);
+    return next;
+  }
+
+  // --------------------------------------------------------------------------
+  // Per-source pipeline
+  // --------------------------------------------------------------------------
+
+  async function fetchOne(source, index, run) {
+    const entry = run.entries[index];
+
+    if (run.cancelled) {
+      markEntry(entry, 'skipped', CANCELLED_MESSAGE);
+      entry.category = 'cancelled';
+      broadcast(false);
+      return skipResult(source, CANCELLED_MESSAGE, 'cancelled');
+    }
+
+    if (Date.now() > run.deadline) {
+      markEntry(entry, 'skipped', BUDGET_MESSAGE);
+      entry.category = 'budget';
+      broadcast(false);
+      return skipResult(source, BUDGET_MESSAGE, 'budget');
+    }
+
+    // Both paths, not just the quiet one: a URL naming the user's own machine
+    // or LAN is not captured at all, and opening it in a tab would perform the
+    // same request with the user's session attached.
+    const blocked = ScrapLLMQuietCapture.privateDestinationReason(source.url);
+    if (blocked) {
+      markEntry(entry, 'error', blocked);
+      entry.category = 'unusable';
+      broadcast(false);
+      queueReplacement(run);
+      return {
+        success: false,
+        tab: { id: null, url: source.url, title: source.title || source.url },
+        error: blocked,
+        category: 'unusable',
+        notes: []
+      };
+    }
+
+    const history = { seenStatuses: [], attempt: 1 };
+    let result = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SOURCE; attempt++) {
+      history.attempt = attempt;
+      markEntry(entry, 'fetching', attempt === 1 ? 'Fetching' : 'Fetching again');
+      entry.attempts = attempt;
+      broadcast(false);
+
+      const outcome = applyQualityGate(
+        await attemptCapture(source, entry, run, history),
+        source, entry, run
+      );
+
+      if (outcome && outcome.success) {
+        // A source that only worked the second time says so, in the document
+        // and on the row: the first failure is part of what this capture is.
+        if (result) {
+          const note = `First attempt failed (${result.error}); this is the retry`;
+          outcome.notes = (outcome.notes || []).concat(note);
+          entry.notes = outcome.notes;
+          entry.category = 'recovered';
+          broadcast(false);
+        }
+        return outcome;
+      }
+
+      // Keep the first pass's sentence: it says what actually happened, and the
+      // retry's own failure is appended to it rather than replacing it.
+      result = result
+        ? Object.assign({}, outcome, {
+          error: `${result.error}; the retry ${
+            Math.round(RETRY_BASE_DELAY_MS / 1000)} s later failed too: ${outcome.error}`
+        })
+        : outcome;
+
+      const category = (outcome && outcome.category) || null;
+      const last = attempt === MAX_ATTEMPTS_PER_SOURCE;
+      if (last || run.cancelled || !retryableCategory(category)) break;
+
+      const delay = retryDelay();
+      // A retry has to fit: the delay plus a whole capture, inside what is left
+      // of the run. Otherwise the source ends now, with the reason it failed.
+      if (Date.now() + delay > run.deadline - RETRY_MIN_REMAINING_MS) break;
+
+      markEntry(entry, 'fetching', `Retrying in ${Math.round(delay / 1000)} s`);
+      broadcast(false);
+      await sleep(delay);
+      if (run.cancelled || Date.now() > run.deadline) break;
+    }
+
+    // Whatever it was, the reason stands and the run pulls the next candidate
+    // so the user still gets the number of sources they asked for.
+    if (result) {
+      const finalStatus = (entry.status === 'error' || entry.status === 'skipped')
+        ? entry.status
+        : 'error';
+      markEntry(entry, finalStatus, result.error);
+      broadcast(false);
+      queueReplacement(run);
+    }
+    return result;
   }
 
   // --------------------------------------------------------------------------
@@ -928,12 +1171,14 @@ const ScrapLLMResearch = (function() {
 
     results.forEach((result, index) => {
       const source = run.sources[index];
+      if (!source) return;
       if (result && result.success) {
         successes.push({ result, source });
       } else {
         failures.push({
           url: source.url,
-          reason: (result && result.error) || 'Conversion failed'
+          reason: (result && result.error) || 'Conversion failed',
+          category: (result && result.category) || null
         });
       }
     });
@@ -955,6 +1200,18 @@ const ScrapLLMResearch = (function() {
       `Capture: ${quietCount} fetched without a tab, ${renderedCount} rendered in a background tab`,
       `Tokens: ~${tokenCount} (o200k_base estimate)`
     ];
+    // What the gate did is part of the document: a reader who sees six sources
+    // where eight were asked for should not have to guess whether two pages
+    // were unreachable or two were spam.
+    const droppedForQuality = failures.filter(
+      failure => failure.category === 'junk' || failure.category === 'duplicate'
+    ).length;
+    const replacements = run.entries.filter(entry => entry.replacement).length;
+    frontMatter.push(`Quality filter: ${run.junkFilter ? 'on' : 'off'}${
+      droppedForQuality ? `, ${droppedForQuality} page(s) dropped by it` : ''}`);
+    if (replacements) {
+      frontMatter.push(`Replacements: ${replacements} further candidate(s) were pulled in for dropped sources`);
+    }
     if (run.captureNote) frontMatter.push(`Capture note: ${run.captureNote}`);
     if (run.degraded) frontMatter.push(`Notes: ${run.degraded}`);
     frontMatter.push('---');
@@ -1114,6 +1371,18 @@ const ScrapLLMResearch = (function() {
       entries: [],
       sources: [],
       rejected: [],
+      // Candidates discovery ranked but did not need, and the number of
+      // sources the run is trying to deliver. One reserve is promoted every
+      // time a source ends without a capture.
+      reserves: [],
+      targetCount: sourceCount,
+      // Fingerprints of everything kept so far, so a mirror of a page already
+      // in the document is recognised as one.
+      accepted: [],
+      // One switch for the whole quality gate, on unless the user turned it
+      // off. There is deliberately no knob per threshold: the thresholds are
+      // measurements, not preferences.
+      junkFilter: settings.researchJunkFilter !== false,
       openTabIds: new Set(),
       cancelled: false,
       resultsTooLargeToPersist: false,
@@ -1173,6 +1442,7 @@ const ScrapLLMResearch = (function() {
     run.engine = search.engine;
     run.degraded = search.degraded;
     run.rejected = search.rejected || [];
+    run.reserves = search.reserves || [];
 
     if (!search.results.length) {
       run.phase = 'empty';
@@ -1181,7 +1451,10 @@ const ScrapLLMResearch = (function() {
       return;
     }
 
-    run.sources = search.results;
+    run.sources = search.results.slice();
+    // What discovery could actually offer, which is what the run promises to
+    // deliver: asking for 8 and finding 6 does not make the run owe 8.
+    run.targetCount = search.results.length;
     run.entries = search.results.map(source => ({
       url: source.url,
       host: source.host,

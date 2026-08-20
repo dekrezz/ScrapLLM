@@ -427,6 +427,13 @@ Source: [{title}]({url})</textarea>
               <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
                 Research fetches each source's HTML in the background and opens a tab only for pages that need one to render. Always rendering is slower and puts every source in the tab strip &mdash; use it if a site refuses the background fetch.
               </small>
+              <label class="setting-option" style="margin-top: 8px;">
+                <input type="checkbox" id="researchJunkFilter" />
+                <span>Drop low-value sources and replace them</span>
+              </label>
+              <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
+                Scores every captured page and drops affiliate and coupon spam, paid-signal landings, and copies of a page already captured, then pulls the next search result in its place. Every drop is listed with its reason.
+              </small>
             </div>
 
             <div class="setting-group">

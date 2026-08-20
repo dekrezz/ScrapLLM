@@ -48,7 +48,13 @@ const SettingsUtils = (function() {
       // for the pages that genuinely need a rendering engine. 'render' opens a
       // background tab for every source, which is slower and visible but uses
       // the page's own session and runs its JavaScript.
-      researchCapture: 'quiet'
+      researchCapture: 'quiet',
+      // Research quality gate. Scores every captured page and drops the ones
+      // that are readable but worthless — affiliate and coupon spam, paid-signal
+      // landings, scraped mirrors of a page already captured — and pulls the
+      // next candidate in their place. One switch, not one knob per threshold:
+      // the thresholds are measurements, not preferences.
+      researchJunkFilter: true
     });
   }
 

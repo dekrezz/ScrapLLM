@@ -621,7 +621,13 @@ describe('ScrapLLMResearch run engine', () => {
 
     const failed = snapshot.entries.find(entry => entry.url === stuck);
     expect(failed.status).toBe('error');
-    expect(failed.note).toBe('Page did not become scriptable within 20 s');
+    // The ladder gives a transient failure one more pass, and the row carries
+    // both halves rather than only the last one.
+    expect(failed.attempts).toBe(2);
+    expect(failed.note).toBe(
+      'Page did not become scriptable within 20 s; the retry 3 s later failed too: ' +
+      'Page did not become scriptable within 20 s'
+    );
 
     const stuckTab = state.created.find(tab => tab.url === stuck);
     expect(state.removed.filter(id => id === stuckTab.id)).toHaveLength(1);
@@ -914,7 +920,9 @@ describe('ScrapLLMResearch document builder', () => {
     expect(doc.markdown).toContain('2. [Page title for https://example3.com/guides/topic-3](<https://example3.com/guides/topic-3>) — example3.com');
 
     expect(doc.markdown).toContain('### Not fetched');
-    expect(doc.markdown).toContain('- https://example2.com/guides/topic-2 — Conversion did not answer within 30 s');
+    expect(doc.markdown).toContain(
+      '- https://example2.com/guides/topic-2 — Conversion did not answer within 30 s; the retry'
+    );
     expect(doc.markdown).toContain('- https://wsj.com/b — Paywalled (skipped before fetching)');
 
     expect(doc.markdown).toContain('\n\n---\n\n## 1. ');
@@ -1196,7 +1204,7 @@ describe('ScrapLLMQuietCapture.classify', () => {
       expect(quiet.privateDestinationReason(url)).toBeTruthy();
       // A tab cannot make such a URL safe, so it is a rejection, not a render.
       expect(quiet.preflight(url, {})).toEqual({
-        decision: 'reject', reason: quiet.privateDestinationReason(url)
+        decision: 'reject', reason: quiet.privateDestinationReason(url), category: 'unusable'
       });
     });
 
@@ -1216,7 +1224,9 @@ describe('ScrapLLMQuietCapture.classify', () => {
       'https://example.com/article'
     );
     expect(verdict).toEqual({
-      decision: 'reject', reason: 'Refused: this URL points at a private address'
+      decision: 'reject',
+      reason: 'Refused: this URL points at a private address',
+      category: 'unusable'
     });
   });
 
@@ -1236,7 +1246,7 @@ describe('ScrapLLMQuietCapture.classify', () => {
       { kind: 'html', status: 200, finalUrl: 'https://example.com/article/', html: '' },
       'https://example.com/article'
     );
-    expect(ordinary).toEqual({ decision: 'use', reason: null });
+    expect(ordinary).toEqual({ decision: 'use', reason: null, category: null });
   });
 
   it('escalates a redirect onto a consent host but not an ordinary one', () => {
@@ -1252,7 +1262,7 @@ describe('ScrapLLMQuietCapture.classify', () => {
       { kind: 'html', status: 200, finalUrl: 'https://www.example.com/article', html: '' },
       'https://example.com/article'
     );
-    expect(other).toEqual({ decision: 'use', reason: null });
+    expect(other).toEqual({ decision: 'use', reason: null, category: null });
   });
 
   it('escalates an empty app shell and a thin extraction, and keeps a real page', () => {
@@ -1263,10 +1273,11 @@ describe('ScrapLLMQuietCapture.classify', () => {
     expect(quiet.classifyExtraction({ textLength: 98, bodyTextLength: 98, emptyAppShell: false }))
       .toEqual({
         decision: 'render',
-        reason: 'Server-rendered text was only 98 characters, so a tab was opened'
+        reason: 'Server-rendered text was only 98 characters, so a tab was opened',
+        category: 'transient'
       });
     expect(quiet.classifyExtraction({ textLength: 1385, bodyTextLength: 4000, emptyAppShell: false }))
-      .toEqual({ decision: 'use', reason: null });
+      .toEqual({ decision: 'use', reason: null, category: null });
   });
 
   it('treats a failed parse as an escalation, not as a run failure', () => {
@@ -1711,5 +1722,486 @@ describe('research capture setting', () => {
 
     expect(captured.researchCapture).toBe('quiet');
     expect(settings.researchCapture).toBe('quiet');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// quiet-capture.js — the walls
+// ---------------------------------------------------------------------------
+
+describe('ScrapLLMQuietCapture wall classification', () => {
+  function loadQuietCapture() {
+    jest.resetModules();
+    delete global.ScrapLLMQuietCapture;
+    require(QUIET_PATH);
+    return global.ScrapLLMQuietCapture;
+  }
+
+  // The body three live sites (retailmenot.com, telegramchannels.me and
+  // pcmag.com) actually answered a background fetch with: a 5.7 KB Cloudflare
+  // interstitial, titled "Just a moment...", with no article in it at all.
+  const CLOUDFLARE_INTERSTITIAL =
+    '<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>' +
+    '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>' +
+    '<div id="challenge-running">Verifying you are human.</div></body></html>';
+
+  it('skips an active bot challenge at once, naming the vendor', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyResponse(
+      {
+        kind: 'httpError', status: 403, contentType: 'text/html',
+        finalUrl: 'https://example.com/a', html: CLOUDFLARE_INTERSTITIAL
+      },
+      'https://example.com/a'
+    );
+
+    expect(verdict.decision).toBe('reject');
+    expect(verdict.category).toBe('wall');
+    expect(verdict.reason).toContain('Cloudflare');
+  });
+
+  it('does not call a CAPTCHA widget on a real article a challenge', () => {
+    const quiet = loadQuietCapture();
+    // A long 200 with a reCAPTCHA on its contact form is a page, not a gate.
+    const html = '<html><body>' + 'a real article. '.repeat(6000) +
+      '<script src="https://www.google.com/recaptcha/api.js"></script></body></html>';
+
+    const verdict = quiet.classifyResponse(
+      { kind: 'html', status: 200, contentType: 'text/html', finalUrl: 'https://example.com/a', html },
+      'https://example.com/a'
+    );
+
+    expect(verdict.decision).toBe('use');
+  });
+
+  it('escalates the first 403 but skips the one that comes back again', () => {
+    const quiet = loadQuietCapture();
+    const response = {
+      kind: 'httpError', status: 403, contentType: 'text/html',
+      finalUrl: 'https://example.com/a', html: '<html><body>Forbidden</body></html>'
+    };
+
+    const first = quiet.classifyResponse(response, 'https://example.com/a', {
+      seenStatuses: [403], attempt: 1
+    });
+    expect(first.decision).toBe('render');
+    expect(first.category).toBe('transient');
+
+    // The status is recorded before the classification, so a repeat carries it
+    // twice: once from this response and once from the attempt before.
+    const again = quiet.classifyResponse(response, 'https://example.com/a', {
+      seenStatuses: [403, 403], attempt: 2
+    });
+    expect(again.decision).toBe('reject');
+    expect(again.category).toBe('wall');
+    expect(again.reason).toContain('refuses automated access');
+  });
+
+  it('calls a network failure transient, so the ladder retries it', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyResponse(
+      { kind: 'networkError', message: 'The server did not answer within 10 s' },
+      'https://example.com/a'
+    );
+
+    expect(verdict.decision).toBe('reject');
+    expect(verdict.category).toBe('transient');
+  });
+
+  it('skips a hard paywall but gives a login wall its one tab first', () => {
+    const quiet = loadQuietCapture();
+    const thin = { textLength: 120, bodyTextLength: 400, emptyAppShell: false };
+
+    const paywall = quiet.classifyExtraction(thin, {
+      html: '<html><body><div class="paywall">Subscribe to continue reading.</div></body></html>',
+      status: 200,
+      attempt: 1
+    });
+    expect(paywall.decision).toBe('reject');
+    expect(paywall.category).toBe('wall');
+    expect(paywall.reason).toContain('paywall');
+
+    const loginHtml =
+      '<html><body><form><input type="password" name="p"></form>Please sign in</body></html>';
+    const firstSight = quiet.classifyExtraction(thin, { html: loginHtml, status: 200, attempt: 1 });
+    expect(firstSight.decision).toBe('render');
+
+    // The tab has been spent by the time a second pass sees the same wall.
+    const afterTheTab = quiet.classifyExtraction(thin, { html: loginHtml, status: 200, attempt: 2 });
+    expect(afterTheTab.decision).toBe('reject');
+    expect(afterTheTab.category).toBe('wall');
+  });
+
+  it('names the wall rather than the parser when a challenge page fails to convert', () => {
+    const quiet = loadQuietCapture();
+    const verdict = quiet.classifyExtraction(
+      { failed: true, error: 'Conversion resulted in empty markdown' },
+      { html: CLOUDFLARE_INTERSTITIAL, status: 403, attempt: 1 }
+    );
+
+    expect(verdict.decision).toBe('reject');
+    expect(verdict.category).toBe('wall');
+    expect(verdict.reason).toContain('Cloudflare');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ladder, the junk gate and replacement, end to end
+// ---------------------------------------------------------------------------
+
+describe('research engine: escalation budget, quality gate and replacement', () => {
+  const QUALITY_PATH = path.join(__dirname, '../extension/source-quality.js');
+  const TERMINAL_PHASES = ['done', 'cancelled', 'error', 'empty', 'interrupted'];
+
+  function source(index, extra = {}) {
+    const host = `example${index}.com`;
+    return Object.assign({
+      url: `https://${host}/guides/topic-${index}`,
+      host,
+      title: `Result ${index}`,
+      snippet: `Snippet ${index}`,
+      engineRank: index,
+      score: 20 - index
+    }, extra);
+  }
+
+  function makeApi() {
+    const state = { created: [], live: new Map(), nextId: 100 };
+    const api = {
+      tabs: {
+        query: async () => [{ id: 1, windowId: 7 }],
+        create: async ({ url }) => {
+          const tab = { id: state.nextId++, url, title: `Page title for ${url}` };
+          state.created.push({ id: tab.id, url });
+          state.live.set(tab.id, tab);
+          return tab;
+        },
+        get: async (tabId) => {
+          if (!state.live.has(tabId)) throw new Error(`No tab with id: ${tabId}`);
+          return state.live.get(tabId);
+        },
+        remove: async (tabId) => { state.live.delete(tabId); },
+        update: async () => {},
+        sendMessage: async (tabId, message) => {
+          if (message.action === 'ping') return { success: true };
+          throw new Error(`unexpected action ${message.action}`);
+        }
+      },
+      storage: {}
+    };
+    return { api, state };
+  }
+
+  // The whole background load order, the quality module included: without it
+  // the engine keeps every capture, which is a different feature.
+  function loadEngine({ results, reserves = [], fetchImpl, convertHtml, convert }) {
+    jest.resetModules();
+    delete global.ScrapLLMResearch;
+    delete global.ScrapLLMQuietCapture;
+    delete global.ScrapLLMSourceQuality;
+    require(MULTITAB_PATH);
+    require(QUIET_PATH);
+    require(QUALITY_PATH);
+
+    global.ScrapLLMSearch = {
+      findSources: async () => ({
+        results, reserves, engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null
+      })
+    };
+    global.ScrapLLMConvert = {
+      convertHtml: jest.fn(convertHtml),
+      estimateTokens: (markdown) => Math.ceil(String(markdown).length / 4)
+    };
+    global.fetch = jest.fn(fetchImpl);
+
+    require(RESEARCH_PATH);
+    global.MultiTabUtils.convertTabToMarkdown = jest.fn(convert ||
+      (async (tabId) => ({ success: true, markdown: `Rendered body of tab ${tabId}`, tokenCount: 20 })));
+
+    return { engine: global.ScrapLLMResearch };
+  }
+
+  function htmlAnswer(bodyFor) {
+    return async (requested) => ({
+      status: 200,
+      url: requested,
+      headers: { get: () => 'text/html; charset=utf-8' },
+      text: async () => bodyFor(requested)
+    });
+  }
+
+  function goodExtraction(url) {
+    return {
+      markdown: `A genuine article about the scheduler and its queue, captured from ${url}. ` +
+        'It explains the handoff between worker threads in ordinary paragraphs, at length, ' +
+        'with nothing for sale anywhere on the page and no calls to action at all.',
+      title: `Title of ${url}`,
+      textLength: 4000,
+      bodyTextLength: 6000,
+      emptyAppShell: false,
+      tokenCount: 30
+    };
+  }
+
+  function spamExtraction(url) {
+    const blocks = [];
+    for (let i = 0; i < 8; i++) {
+      blocks.push(
+        `Use code SAVE${i} for an exclusive deal. This discount code is a limited-time offer ` +
+        'with free shipping and a money-back guarantee. We may earn a commission.',
+        `[View deal](https://shop.example.com/go/item-${i}?tag=aff-1) ` +
+        `[Shop now](https://shop.example.com/out/item-${i}?ref=aff-2)`
+      );
+    }
+    return {
+      markdown: blocks.join('\n\n'),
+      title: `Coupons from ${url}`,
+      textLength: 4000,
+      bodyTextLength: 6000,
+      emptyAppShell: false,
+      tokenCount: 30
+    };
+  }
+
+  async function waitForRun(engine) {
+    for (let i = 0; i < 600; i++) {
+      if (TERMINAL_PHASES.includes(engine.getSnapshot().phase)) return;
+      await jest.advanceTimersByTimeAsync(250);
+    }
+    throw new Error('the run never reached the expected state');
+  }
+
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => {
+    jest.useRealTimers();
+    delete global.ScrapLLMSearch;
+    delete global.ScrapLLMConvert;
+    delete global.ScrapLLMQuietCapture;
+    delete global.ScrapLLMSourceQuality;
+    delete global.fetch;
+  });
+
+  it('drops a coupon farm, pulls the next candidate, and says both in the document', async () => {
+    const spam = 'https://example2.com/guides/topic-2';
+    const replacement = 'https://reserve1.com/guides/topic-9';
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1), source(2), source(3)],
+      reserves: [source(9, { url: replacement, host: 'reserve1.com' })],
+      fetchImpl: htmlAnswer(() => '<html><body>a real page</body></html>'),
+      convertHtml: ({ url }) => (url === spam ? spamExtraction(url) : goodExtraction(url))
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'best vpn deal coupon code', sourceCount: 5, settings: {}, hostAccess: true
+    });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(state.created).toHaveLength(0);
+    expect(snapshot.dropped).toBe(1);
+    expect(snapshot.replacements).toBe(1);
+    expect(snapshot.reservesLeft).toBe(0);
+    expect(snapshot.succeeded).toBe(3);
+
+    const dropped = snapshot.entries.find(entry => entry.url === spam);
+    expect(dropped.status).toBe('skipped');
+    expect(dropped.category).toBe('junk');
+    expect(dropped.note).toContain('Dropped as low-value');
+
+    const pulled = snapshot.entries.find(entry => entry.url === replacement);
+    expect(pulled.replacement).toBe(true);
+    expect(pulled.status).toBe('ok');
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Quality filter: on, 1 page(s) dropped by it');
+    expect(doc.markdown).toContain('Replacements: 1 further candidate(s)');
+    expect(doc.markdown).toContain(`- ${spam} — Dropped as low-value`);
+  });
+
+  it('keeps every source when the junk filter is off', async () => {
+    const spam = 'https://example2.com/guides/topic-2';
+    const { api } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1), source(2), source(3)],
+      reserves: [source(9)],
+      fetchImpl: htmlAnswer(() => '<html><body>a real page</body></html>'),
+      convertHtml: ({ url }) => (url === spam ? spamExtraction(url) : goodExtraction(url))
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'best vpn deal coupon code',
+      sourceCount: 5,
+      settings: { researchJunkFilter: false },
+      hostAccess: true
+    });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.succeeded).toBe(3);
+    expect(snapshot.dropped).toBe(0);
+    expect(snapshot.replacements).toBe(0);
+
+    const doc = await engine.getDocument(snapshot.runId);
+    expect(doc.markdown).toContain('Quality filter: off');
+  });
+
+  it('retries a transient failure once and keeps the first failure in the note', async () => {
+    let attempts = 0;
+    const { api } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1)],
+      fetchImpl: async (requested) => {
+        attempts++;
+        if (attempts === 1) throw new Error('network blip');
+        return {
+          status: 200,
+          url: requested,
+          headers: { get: () => 'text/html; charset=utf-8' },
+          text: async () => '<html><body>a real page</body></html>'
+        };
+      },
+      convertHtml: ({ url }) => goodExtraction(url)
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'scheduler queue handoff', sourceCount: 5, settings: {}, hostAccess: true
+    });
+    await waitForRun(engine);
+
+    const entry = engine.getSnapshot().entries[0];
+    expect(attempts).toBe(2);
+    expect(entry.status).toBe('ok');
+    expect(entry.attempts).toBe(2);
+    expect(entry.notes.some(note => note.includes('First attempt failed (network blip)'))).toBe(true);
+  });
+
+  it('spends no tab and no retry on a bot challenge, and replaces it instead', async () => {
+    const walled = 'https://example1.com/guides/topic-1';
+    const replacement = 'https://reserve1.com/guides/topic-9';
+    let fetches = 0;
+    const { api, state } = makeApi();
+    const { engine } = loadEngine({
+      results: [source(1)],
+      reserves: [source(9, { url: replacement, host: 'reserve1.com' })],
+      fetchImpl: async (requested) => {
+        fetches++;
+        const challenge = requested === walled;
+        return {
+          status: challenge ? 403 : 200,
+          url: requested,
+          headers: { get: () => 'text/html; charset=utf-8' },
+          text: async () => (challenge
+            ? '<html><head><title>Just a moment...</title></head><body>' +
+              '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>' +
+              '</body></html>'
+            : '<html><body>a real page</body></html>')
+        };
+      },
+      convertHtml: ({ url }) => goodExtraction(url)
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'scheduler queue handoff', sourceCount: 5, settings: {}, hostAccess: true
+    });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    const blocked = snapshot.entries.find(entry => entry.url === walled);
+    expect(state.created).toHaveLength(0);
+    expect(blocked.status).toBe('skipped');
+    expect(blocked.category).toBe('wall');
+    expect(blocked.attempts).toBe(1);
+    expect(blocked.note).toContain('Cloudflare');
+    // One fetch for the wall, one for the candidate that took its place.
+    expect(fetches).toBe(2);
+    expect(snapshot.replacements).toBe(1);
+    expect(snapshot.succeeded).toBe(1);
+  });
+
+  it('drops a mirror of a source already captured rather than filing it twice', async () => {
+    const mirror = 'https://example2.com/guides/topic-2';
+    const { api } = makeApi();
+    const body = goodExtraction('https://example1.com/guides/topic-1');
+    const { engine } = loadEngine({
+      results: [source(1), source(2, { url: mirror })],
+      fetchImpl: htmlAnswer(() => '<html><body>a real page</body></html>'),
+      // The same article, republished: identical text, a different host.
+      convertHtml: () => ({
+        markdown: `${body.markdown} ${body.markdown}`,
+        title: 'The same article',
+        textLength: 4000,
+        bodyTextLength: 6000,
+        emptyAppShell: false,
+        tokenCount: 30
+      })
+    });
+
+    engine.init(api);
+    await engine.start({
+      query: 'scheduler queue handoff', sourceCount: 5, settings: {}, hostAccess: true
+    });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.succeeded).toBe(1);
+    const dropped = snapshot.entries.find(entry => entry.url === mirror);
+    expect(dropped.category).toBe('duplicate');
+    expect(dropped.note).toContain('near-duplicate');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Discovery keeps a reserve for the engine to draw on
+// ---------------------------------------------------------------------------
+
+describe('ScrapLLMSearch reserves', () => {
+  it('returns the ranked surplus as reserves rather than discarding it', () => {
+    jest.resetModules();
+    delete global.ScrapLLMSearch;
+    require(SEARCH_PATH);
+    const Search = global.ScrapLLMSearch;
+
+    const candidates = [];
+    for (let i = 1; i <= 9; i++) {
+      candidates.push({
+        url: `https://example${i}.com/guides/topic-${i}`,
+        title: `Result ${i}`,
+        snippet: `Snippet ${i}`,
+        engineRank: i
+      });
+    }
+
+    const { results, reserves } = Search.filterAndRank(candidates, 5, 'scheduler queue handoff');
+
+    expect(results).toHaveLength(5);
+    expect(reserves).toHaveLength(4);
+    // The reserve is the surplus, never a repeat of what was already kept.
+    const keptUrls = results.map(entry => entry.url);
+    expect(reserves.some(entry => keptUrls.includes(entry.url))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The single setting
+// ---------------------------------------------------------------------------
+
+describe('research junk filter setting', () => {
+  it('defaults researchJunkFilter to on in the shared defaults', async () => {
+    jest.resetModules();
+    require(SETTINGS_PATH);
+    const captured = {};
+    const browserAPI = {
+      storage: { sync: { get: async (defaults) => Object.assign(captured, defaults) } }
+    };
+
+    const settings = await global.SettingsUtils.getUserSettings(browserAPI);
+
+    expect(captured.researchJunkFilter).toBe(true);
+    expect(settings.researchJunkFilter).toBe(true);
   });
 });

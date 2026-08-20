@@ -16,20 +16,49 @@ const MultiTabUtils = (function() {
   // Index-cursor worker pool. Shared by the multi-tab path (4 at a time) and
   // by the research engine (3 at a time). `handler` must resolve, never reject:
   // a rejection would sink the whole pool.
+  //
+  // `items` may grow while the pool runs — research appends a replacement
+  // candidate when a source is skipped at a wall or dropped as junk — so the
+  // cursor is compared against the *live* length, and a worker that runs out of
+  // items waits for the others instead of returning: one of them may still add
+  // the item it would have taken. The wait is a promise woken by whichever
+  // worker finishes next, never a timer, so the pool needs no polling interval
+  // and cannot outlive its work. When the queue is empty and nobody is busy,
+  // every worker wakes and returns.
   async function runPool(items, concurrency, handler) {
-    const total = items.length;
-    const results = new Array(total);
+    const results = new Array(items.length);
     let nextIndex = 0;
+    let busy = 0;
+    let idle = [];
 
-    // JavaScript is single-threaded, so the cursor needs no locking.
+    function wake() {
+      const waiting = idle;
+      idle = [];
+      waiting.forEach(resolve => resolve());
+    }
+
     async function worker() {
-      while (nextIndex < total) {
-        const index = nextIndex++;
-        results[index] = await handler(items[index], index);
+      for (;;) {
+        if (nextIndex < items.length) {
+          const index = nextIndex++;
+          busy++;
+          try {
+            results[index] = await handler(items[index], index);
+          } finally {
+            busy--;
+            wake();
+          }
+          continue;
+        }
+        if (busy === 0) {
+          wake();
+          return;
+        }
+        await new Promise(resolve => idle.push(resolve));
       }
     }
 
-    const workerCount = Math.max(0, Math.min(concurrency, total));
+    const workerCount = Math.max(0, Math.min(concurrency, items.length));
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
     return results;
   }

@@ -507,6 +507,7 @@ async function loadSettings() {
     xMaxPostsSelect.value = String(data.xMaxPosts);
     setResearchSourceCount(data.researchSourceCount, { persist: false });
     setResearchCapture(data.researchCapture, { persist: false });
+    researchJunkFilterCheckbox.checked = data.researchJunkFilter !== false;
     showTokenCountCheckbox.checked = tokenSettings.showTokenCount;
 
     // Show/hide metadata format container based on checkbox state
@@ -542,6 +543,7 @@ async function saveSettings() {
     const xMaxPosts = xMaxPostsSelect.value;
     const researchSourceCount = researchSourceCountValue;
     const researchCapture = researchCaptureValue;
+    const researchJunkFilter = researchJunkFilterCheckbox.checked;
     const showTokenCount = showTokenCountCheckbox.checked;
     const tokenContextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
 
@@ -564,6 +566,7 @@ async function saveSettings() {
       xMaxPosts,
       researchSourceCount,
       researchCapture,
+      researchJunkFilter,
       showTokenCount,
       tokenContextLimit,
     });
@@ -707,6 +710,7 @@ function getCurrentSettings() {
     xMaxPosts: xMaxPostsSelect.value,
     researchSourceCount: researchSourceCountValue,
     researchCapture: researchCaptureValue,
+    researchJunkFilter: researchJunkFilterCheckbox.checked,
   };
 }
 
@@ -1190,6 +1194,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   researchCaptureRadios.forEach((radio) => {
     radio.addEventListener("change", () => setResearchCapture(radio.value));
   });
+  researchJunkFilterCheckbox.addEventListener("change", saveSettings);
 
   // Metadata format settings
   includeMetadataCheckbox.addEventListener("change", () => {
@@ -1280,6 +1285,7 @@ const mainHeader = mainView.querySelector(".header");
 
 const RESEARCH_PORT_NAME = "scrapllm-research";
 const researchCaptureRadios = document.querySelectorAll('input[name="researchCapture"]');
+const researchJunkFilterCheckbox = document.getElementById("researchJunkFilter");
 const RESEARCH_SOURCE_COUNTS = [5, 8, 12];
 const RESEARCH_CAPTURE_MODES = ["quiet", "render"];
 // The quiet path fetches each source from the background, which needs access to

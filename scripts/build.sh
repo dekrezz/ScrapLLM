@@ -92,6 +92,7 @@ build_chrome() {
   cp "$EXT_DIR/settings.js" "$CHROME_DIR/"
   cp "$EXT_DIR/search.js" "$CHROME_DIR/"
   cp "$EXT_DIR/research.js" "$CHROME_DIR/"
+  cp "$EXT_DIR/source-quality.js" "$CHROME_DIR/"
   cp "$EXT_DIR/quiet-capture.js" "$CHROME_DIR/"
   # Chrome only: a service worker has no DOM, so fetched research pages are
   # parsed in an offscreen document.
@@ -170,6 +171,7 @@ build_firefox() {
   cp "$EXT_DIR/settings.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/search.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/research.js" "$FIREFOX_DIR/"
+  cp "$EXT_DIR/source-quality.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/quiet-capture.js" "$FIREFOX_DIR/"
   cp "$EXT_DIR/styles.css" "$FIREFOX_DIR/"
   cp "$EXT_DIR/token-counter.js" "$FIREFOX_DIR/" 2>/dev/null || echo "Warning: token-counter.js not found"
@@ -198,7 +200,7 @@ build_firefox() {
     .permissions = (.permissions - ["offscreen"]) |
     if has("background") then
       .background = {
-        "scripts": ["libs/jszip.min.js", "libs/readability.js", "libs/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "research.js", "background.js"]
+        "scripts": ["libs/jszip.min.js", "libs/readability.js", "libs/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "source-quality.js", "research.js", "background.js"]
       }
     else
       .
@@ -208,7 +210,7 @@ build_firefox() {
     echo "jq not found, using manual modification..."
     cp "$EXT_DIR/manifest.json" "$FIREFOX_DIR/manifest.json"
     # This is a basic substitution but might not work for all cases
-    sed -i.bak 's/"service_worker": "background.js",\s*"type": "module"/"scripts": ["libs\/jszip.min.js", "libs\/readability.js", "libs\/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "research.js", "background.js"]/' "$FIREFOX_DIR/manifest.json" || true
+    sed -i.bak 's/"service_worker": "background.js",\s*"type": "module"/"scripts": ["libs\/jszip.min.js", "libs\/readability.js", "libs\/turndown.js", "convert-core.js", "multi-tab-utils.js", "settings.js", "search.js", "quiet-capture.js", "source-quality.js", "research.js", "background.js"]/' "$FIREFOX_DIR/manifest.json" || true
     sed -i.bak '/"offscreen"/d' "$FIREFOX_DIR/manifest.json" || true
     rm -f "$FIREFOX_DIR/manifest.json.bak" 2>/dev/null || true
   fi
@@ -249,6 +251,7 @@ build_source() {
   cp "$EXT_DIR/settings.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/search.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/research.js" "$SOURCE_DIR/"
+  cp "$EXT_DIR/source-quality.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/quiet-capture.js" "$SOURCE_DIR/"
   cp "$EXT_DIR/offscreen.html" "$SOURCE_DIR/"
   cp "$EXT_DIR/offscreen.js" "$SOURCE_DIR/"

@@ -11,7 +11,7 @@
 if (typeof importScripts === 'function') {
   try {
     importScripts('libs/jszip.min.js', 'settings.js', 'multi-tab-utils.js', 'search.js',
-                  'quiet-capture.js', 'research.js');
+                  'quiet-capture.js', 'source-quality.js', 'research.js');
   } catch (e) {
     console.error('Failed to load dependencies:', e);
     throw new Error('Critical dependencies failed to load. Please reinstall the extension.');

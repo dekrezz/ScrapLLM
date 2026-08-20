@@ -365,10 +365,14 @@ const ScrapLLMSearch = (function() {
     }
 
     kept.sort((a, b) => (b.score - a.score) || (a.engineRank - b.engineRank));
-    // Never pad, never overflow: the surplus is simply not fetched.
+    // Never pad, never overflow: the run fetches `max` and keeps the surplus as
+    // `reserves`. The engine pulls from it when a source is skipped at a wall or
+    // dropped as junk, so a dropped source does not shrink the result. Nothing
+    // here fetches the surplus; it is only offered.
     const results = kept.slice(0, max);
+    const reserves = kept.slice(max);
 
-    return { results, rejected };
+    return { results, reserves, rejected };
   }
 
   // --------------------------------------------------------------------------
@@ -474,6 +478,7 @@ const ScrapLLMSearch = (function() {
     if (attempt.outcome === 'zero') {
       return {
         results: [],
+        reserves: [],
         engine,
         usedRecency: recency,
         rejected: [],
@@ -481,7 +486,7 @@ const ScrapLLMSearch = (function() {
       };
     }
 
-    const { results, rejected } = filterAndRank(attempt.parsed.results, limit, normalizedQuery);
+    const { results, reserves, rejected } = filterAndRank(attempt.parsed.results, limit, normalizedQuery);
 
     if (attempt.parsed.results.length > 0 && results.length < COMFORTABLE_SOURCE_COUNT) {
       // Appended, never assigned: a thin result set does not stop being the
@@ -495,6 +500,7 @@ const ScrapLLMSearch = (function() {
 
     return {
       results,
+      reserves,
       engine,
       usedRecency: recency,
       rejected,
