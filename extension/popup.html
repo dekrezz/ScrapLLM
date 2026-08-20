@@ -188,6 +188,9 @@
               <span class="research-plan-label">Sources</span>
               <div id="researchSegments" class="research-segmented" role="radiogroup"
                    aria-label="How many sources to read">
+                <!-- The selection is one pill that travels between the
+                     segments; popup.js drives its position and width. -->
+                <span class="segment-indicator" aria-hidden="true"></span>
                 <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="5">5</button>
                 <button class="segment-btn is-selected" type="button" role="radio" aria-checked="true" tabindex="0" data-value="8">8</button>
                 <button class="segment-btn" type="button" role="radio" aria-checked="false" tabindex="-1" data-value="12">12</button>
@@ -201,8 +204,11 @@
           <!-- STATE: run -->
           <div id="researchRun" class="research-block hidden" data-block="run">
             <p class="research-phase">Finding sources…</p>
+            <!-- Discovery has no denominator: no aria-valuenow and no max,
+                 which is how a progressbar says indeterminate. popup.js sets
+                 both once the source count is known. -->
             <div id="researchTrack" class="research-track" role="progressbar"
-                 aria-valuemin="0" aria-valuemax="0" aria-valuetext="Finding sources">
+                 aria-valuemin="0" aria-valuetext="Finding sources">
               <div class="research-fill"></div>
             </div>
             <ul id="researchSources" class="research-sources" role="list" aria-live="off"></ul>

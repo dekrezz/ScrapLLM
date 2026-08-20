@@ -84,6 +84,9 @@
   --gap-lg: 1rem;
   --gap-xl: 1.25rem;
   --edge: 1.25rem;
+  /* The research bar's own height: 0.5rem + 0.75rem of padding around a
+     2.375rem field. Everything that has to clear the bar derives from it. */
+  --research-bar-h: 3.625rem;
 
   /* Non-gesture transitions only */
   --t-fast: 100ms cubic-bezier(0.2, 0, 0, 1);
@@ -164,10 +167,20 @@ body {
   transition: background-color var(--t-base), color var(--t-base);
 }
 
+/* Spacing is the layout's job — gap and padding, in rem. The browser's own
+   paragraph and list margins sat between the sheet's rows and its lists and
+   spent 90px of the run state on nothing. */
 h1,
 h2,
-h3 {
+h3,
+p,
+ul {
   margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
 }
 
 h1 {
@@ -232,10 +245,13 @@ input {
 
 .popup-wrapper {
   width: 25rem;
-  /* Sized to the tallest main-view state (multi-tab actions + token counter)
-     plus the 3.25rem research bar seated at the bottom edge. Constant in every
-     state — the popup window must never resize under the pointer. */
-  height: 25rem;
+  /* Sized to the tallest main-view state — a chat page with a selection, after
+     a conversion: Copy Selection, Copy Chat, Convert, Download, the status
+     line, the token counter and its warning — plus the research bar seated at
+     the bottom edge, which that stack must clear rather than slide under.
+     Constant in every state: the popup window must never resize under the
+     pointer. */
+  height: 28rem;
   position: relative;
   overflow: hidden;
   background: var(--background-color);
@@ -402,8 +418,9 @@ a.icon-btn {
 }
 
 .bottom-spacer {
-  /* Clears the research bar, so the action stack never sits underneath it. */
-  height: 3.5rem;
+  /* Clears the research bar, so the action stack never sits underneath it —
+     the bar's real height plus a gap, not a constant that drifts from it. */
+  height: calc(var(--research-bar-h) + var(--gap-sm));
 }
 
 .main-controls {
@@ -1320,6 +1337,14 @@ input[type="checkbox"] {
   min-height: 0;
   padding: 0;
   border-radius: var(--r-pill);
+  /* The arrival scale is a custom property written by the spring in popup.js,
+     so the press can compose with it instead of being overwritten by an
+     inline transform. */
+  transform: scale(var(--go-scale, 1));
+}
+
+.primary-btn.research-go.is-pressed {
+  transform: scale(calc(var(--go-scale, 1) * 0.94));
 }
 
 .primary-btn.research-go .btn-icon {
@@ -1340,9 +1365,12 @@ input[type="checkbox"] {
   gap: var(--gap-md);
   /* The bottom pad is the bar's height: the sheet passes under the bar
      instead of butting against it. */
-  padding: var(--gap-md) var(--edge) 3.75rem;
-  /* Never covers the header — there is always a way out. */
-  max-height: calc(100% - 3.25rem);
+  padding: var(--gap-md) var(--edge) var(--research-bar-h);
+  /* Never covers the header — there is always a way out, and a light
+     translucent surface never stacks on another one. This is the value before
+     the first open; popup.js then measures the header's real bottom edge, so
+     a larger text size moves the ceiling with it. */
+  max-height: calc(100% - 5.0625rem);
   border-radius: var(--r-xl) var(--r-xl) 0 0;
   border-top: 1px solid var(--material-edge);
   background: var(--material-menu);
@@ -1350,8 +1378,20 @@ input[type="checkbox"] {
   backdrop-filter: var(--material-blur-lg);
   box-shadow: var(--shadow-3);
   transform-origin: bottom center;
-  will-change: transform, filter;
+}
+
+/* The sheet is dragged, so nothing it is grabbed by may pan — but touch-action
+   intersects down the tree, and `none` on the sheet takes the scrolling away
+   from the two lists inside it. So it sits on the pieces a drag can start
+   from, and the lists keep their pan. */
+.research-sheet > *,
+.research-block > * {
   touch-action: none;
+}
+
+.research-sources,
+.research-failed-list {
+  touch-action: pan-y;
 }
 
 .research-grabber {
@@ -1381,7 +1421,10 @@ input[type="checkbox"] {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 0.8125rem;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  /* Small text wants a touch of air, not the tightening that suits display
+     sizes; the leading is tight because this is dense, numeric UI. */
+  letter-spacing: 0.01em;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
   color: var(--label-secondary);
 }
@@ -1391,7 +1434,23 @@ input[type="checkbox"] {
   flex-direction: column;
   gap: var(--gap-md);
   min-height: 0;
-  will-change: transform, opacity, filter;
+}
+
+/* The run state is the one the feature exists for, and its list is the content:
+   the block takes the height the sheet has left, and the list takes what the
+   block has left. */
+.research-block[data-block="run"] {
+  flex: 1 1 auto;
+}
+
+/* A block on its way out stops sizing the sheet the moment it starts leaving,
+   so the surface is measured against the block that is arriving and its top
+   edge travels there instead of snapping. popup.js pins the top. */
+.research-block.is-leaving {
+  position: absolute;
+  left: var(--edge);
+  right: var(--edge);
+  pointer-events: none;
 }
 
 .research-lede {
@@ -1417,6 +1476,7 @@ input[type="checkbox"] {
 }
 
 .research-segmented {
+  position: relative;
   display: flex;
   gap: 0.125rem;
   padding: 0.125rem;
@@ -1424,7 +1484,22 @@ input[type="checkbox"] {
   background: var(--fill-tertiary);
 }
 
+/* One pill for the whole control: it travels between the segments under two
+   springs in popup.js rather than blinking from one to the next. */
+.segment-indicator {
+  position: absolute;
+  top: 0.125rem;
+  bottom: 0.125rem;
+  left: 0;
+  width: 0;
+  border-radius: var(--r-pill);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+  pointer-events: none;
+}
+
 .segment-btn {
+  position: relative;
   min-width: 2.25rem;
   height: 1.625rem;
   border: none;
@@ -1443,10 +1518,9 @@ input[type="checkbox"] {
   color: var(--text-color);
 }
 
+/* Only the colour belongs to the button; the pill behind it is what moves. */
 .segment-btn.is-selected {
-  background: var(--surface-raised);
   color: var(--text-color);
-  box-shadow: var(--shadow-1);
 }
 
 .segment-btn.is-pressed {
@@ -1480,6 +1554,9 @@ input[type="checkbox"] {
 }
 
 .research-track {
+  /* Four pixels that must stay four pixels: as a flex item under pressure the
+     bar was squashed to nothing. */
+  flex: none;
   height: 0.25rem;
   border-radius: var(--r-pill);
   background: var(--fill-tertiary);
@@ -1500,7 +1577,12 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
-  max-height: 8.5rem;
+  /* The list is what the run state exists to show, so it takes the height the
+     sheet has left rather than a cap that leaves it shorter than two rows: it
+     asks for all its rows, which pushes the sheet to its ceiling, and then it
+     is the one thing that gives the space back. */
+  flex: 1 1 auto;
+  min-height: 6.5rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   /* A clipped row at the edge says "there is more" without a divider. */
@@ -1526,7 +1608,6 @@ input[type="checkbox"] {
   align-items: center;
   gap: var(--gap-sm);
   padding: 0.25rem 0;
-  will-change: transform, opacity;
 }
 
 .source-glyph {
@@ -1608,7 +1689,6 @@ input[type="checkbox"] {
   line-height: 1.3;
   color: var(--label-tertiary);
   white-space: nowrap;
-  will-change: transform, opacity;
 }
 
 .source-path::before {
@@ -1658,6 +1738,8 @@ input[type="checkbox"] {
 .result-file {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   font-size: 0.75rem;
+  /* Tighter than body copy: this is one dense line of filename. */
+  line-height: 1.3;
   letter-spacing: 0;
   color: var(--text-color);
   white-space: nowrap;
@@ -1751,12 +1833,18 @@ input[type="checkbox"] {
     filter: brightness(0.94);
   }
 
-  /* The sheet arrives in place instead of travelling; the rows do not stagger
-     in, and the fetching glyph stops spinning but stays legible. */
-  .research-sheet {
-    transition: opacity 140ms ease;
+  /* The go button keeps its arrival scale (the spring lands it at 1 under
+     reduced motion) and takes the press as brightness alone. */
+  .primary-btn.research-go,
+  .primary-btn.research-go.is-pressed {
+    transform: scale(var(--go-scale, 1));
   }
 
+  /* The sheet arrives in place instead of travelling: popup.js keeps its
+     spring and spends it on opacity, so the cross-fade is real motion the user
+     can still grab, not a transition on an element that is about to be
+     display:none. The rows do not stagger in, and the fetching glyph stops
+     spinning but stays legible. */
   .source-row {
     transform: none !important;
   }

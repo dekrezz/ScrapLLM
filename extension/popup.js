@@ -60,31 +60,37 @@ const browserAPI = (function () {
       }))
     };
 
-    api.storage = {
-      sync: {
-        get: function (keys) {
-          return new Promise((resolve, reject) => {
-            chrome.storage.sync.get(keys, (result) => {
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message || 'Unknown error'));
-              } else {
-                resolve(result);
-              }
-            });
+    // Both areas go through the same promise wrapper: `sync` carries the
+    // settings, `local` the marker that says a finished run has already
+    // downloaded itself.
+    const promiseArea = (area) => ({
+      get: function (keys) {
+        return new Promise((resolve, reject) => {
+          area.get(keys, (result) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message || 'Unknown error'));
+            } else {
+              resolve(result);
+            }
           });
-        },
-        set: function (items) {
-          return new Promise((resolve, reject) => {
-            chrome.storage.sync.set(items, () => {
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message || 'Unknown error'));
-              } else {
-                resolve();
-              }
-            });
-          });
-        },
+        });
       },
+      set: function (items) {
+        return new Promise((resolve, reject) => {
+          area.set(items, () => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message || 'Unknown error'));
+            } else {
+              resolve();
+            }
+          });
+        });
+      },
+    });
+
+    api.storage = {
+      sync: promiseArea(chrome.storage.sync),
+      local: promiseArea(chrome.storage.local),
     };
 
     api.commands = chrome.commands;
@@ -1243,6 +1249,7 @@ const researchSheetTitle = document.getElementById("researchSheetTitle");
 const researchCount = document.getElementById("researchCount");
 const researchPlan = document.getElementById("researchPlan");
 const researchSegments = document.getElementById("researchSegments");
+const researchSegmentIndicator = researchSegments.querySelector(".segment-indicator");
 const researchStartBtn = document.getElementById("researchStartBtn");
 const researchRun = document.getElementById("researchRun");
 const researchPhase = researchRun.querySelector(".research-phase");
@@ -1266,6 +1273,10 @@ const researchEditBtn = document.getElementById("researchEditBtn");
 const researchSummary = document.getElementById("researchSummary");
 const researchAlert = document.getElementById("researchAlert");
 const centerSection = document.querySelector(".center-section");
+// The sheet may not cover the header — the way out of the research task runs
+// through it — and the header is as tall as the user's text size makes it, so
+// the ceiling is measured off this element rather than guessed as a constant.
+const mainHeader = mainView.querySelector(".header");
 
 const RESEARCH_PORT_NAME = "scrapllm-research";
 const researchCaptureRadios = document.querySelectorAll('input[name="researchCapture"]');
@@ -1285,6 +1296,12 @@ let researchSnapshot = null;
 let researchDeliveredRunId = null;
 let researchLocalError = null;
 let sheetTravel = 320;
+// Daylight between the header's bottom edge and the top of the sheet.
+const SHEET_HEADER_GAP = 8;
+// A finished run downloads itself once. The marker outlives this window,
+// because the background keeps the run in `done` for ten minutes and hands the
+// same snapshot to every popup opened in that window.
+const RESEARCH_DELIVERED_KEY = "researchDeliveredRunId";
 let renderedRunKey = "";
 let lastSummaryAt = 0;
 let lastSummaryText = "";
@@ -1303,11 +1320,31 @@ function prefersReducedTransparency() {
 // belongs here and nowhere else in this feature — this is the surface a
 // gesture can throw.
 
+// Reduced motion keeps the spring and spends it on opacity alone: the spring
+// is what makes the surface interruptible, and a CSS transition on an element
+// that is about to be display:none never gets a frame to run in. Critically
+// damped, because an opacity that overshoots is a flicker.
+function sheetTransition(extra) {
+  const base = Motion.prefersReducedMotion()
+    ? { damping: Motion.PRESETS.move.damping, response: 0.22, force: true }
+    : { damping: Motion.PRESETS.sheet.damping, response: Motion.PRESETS.sheet.response };
+  return Object.assign(base, extra || {});
+}
+
+function blockTransition() {
+  return Motion.prefersReducedMotion()
+    ? { damping: Motion.PRESETS.move.damping, response: 0.2, force: true }
+    : { damping: Motion.PRESETS.snappy.damping, response: Motion.PRESETS.snappy.response };
+}
+
 const sheetSpring = new Motion.Spring(0, {
   damping: Motion.PRESETS.sheet.damping,
   response: Motion.PRESETS.sheet.response,
   onUpdate: (value) => renderSheet(value),
   onRest: (spring) => {
+    // will-change is a promise about the next few frames, not a property: it
+    // is set when the surface is about to move and dropped once it rests.
+    researchSheet.style.willChange = "";
     if (spring.value <= 0.001) {
       researchSheet.classList.add("hidden");
       researchScrim.classList.add("hidden");
@@ -1323,13 +1360,15 @@ const sheetSpring = new Motion.Spring(0, {
 function renderSheet(value) {
   const reduced = Motion.prefersReducedMotion();
   const flat = reduced || prefersReducedTransparency();
+  const shown = Motion.clamp(value, 0, 1);
 
   researchSheet.style.transform = reduced
     ? "none"
     : `translate3d(0, ${(1 - value) * sheetTravel}px, 0) scale(${0.96 + value * 0.04})`;
   researchSheet.style.filter = flat || value > 0.99 ? "none" : `blur(${(1 - value) * 8}px)`;
-  researchSheet.style.opacity = reduced ? (value > 0.5 ? "1" : "0") : "1";
-  researchScrim.style.opacity = String(Motion.clamp(value, 0, 1));
+  // The same spring, spent on the cross-fade when travel is unwelcome.
+  researchSheet.style.opacity = reduced ? String(shown) : "1";
+  researchScrim.style.opacity = String(shown);
 }
 
 // Progress never overshoots past a count that has not happened yet, so this
@@ -1346,28 +1385,43 @@ const goSpring = new Motion.Spring(0, {
   damping: Motion.PRESETS.snappy.damping,
   response: Motion.PRESETS.snappy.response,
   onUpdate: (value) => {
-    researchGoBtn.style.transform = Motion.prefersReducedMotion()
-      ? "none"
-      : `scale(${0.6 + value * 0.4})`;
+    // Published as a custom property, never as an inline transform: an inline
+    // transform outranks the stylesheet, and the pressed state of this button
+    // is a scale rule — writing the arrival scale here would leave the control
+    // that starts the whole feature with no press feedback at all.
+    researchGoBtn.style.setProperty(
+      "--go-scale",
+      Motion.prefersReducedMotion() ? "1" : String(0.6 + value * 0.4)
+    );
     researchGoBtn.style.opacity = String(Motion.clamp(value, 0, 1));
     researchGoBtn.style.pointerEvents = value > 0.5 ? "" : "none";
   }
 });
 
 // The blocks cross in the same frame — the outgoing one leaves while the
-// incoming one arrives — because the sheet itself never moves between states.
+// incoming one arrives — and the outgoing one leaves the layout flow as it
+// goes, so the sheet is sized by the block that is arriving. The height it
+// travels to is sprung (below), because a bottom-anchored surface that changes
+// height moves its top edge, and a hundred pixels in one frame is a teleport.
 function makeBlockSpring(element) {
   return new Motion.Spring(0, {
     damping: Motion.PRESETS.snappy.damping,
     response: Motion.PRESETS.snappy.response,
     onUpdate: (value) => {
       const reduced = Motion.prefersReducedMotion();
-      element.style.opacity = String(Motion.clamp(value * 1.4, 0, 1));
+      // Under reduced motion the two blocks cross-fade one-to-one; with travel
+      // available the incoming block leads, so it is legible before it lands.
+      element.style.opacity = String(Motion.clamp(reduced ? value : value * 1.4, 0, 1));
       element.style.transform = reduced ? "none" : `scale(${0.96 + value * 0.04})`;
       element.style.filter = reduced || value > 0.99 ? "none" : `blur(${(1 - value) * 6}px)`;
     },
     onRest: (spring) => {
-      if (spring.value <= 0.001) element.classList.add("hidden");
+      element.style.willChange = "";
+      if (spring.value <= 0.001) {
+        element.classList.add("hidden");
+        element.classList.remove("is-leaving");
+        element.style.top = "";
+      }
     }
   });
 }
@@ -1379,23 +1433,81 @@ const blockSprings = {
   error: makeBlockSpring(researchError)
 };
 
+const RESEARCH_BLOCKS = {
+  plan: researchPlan,
+  run: researchRun,
+  result: researchResult,
+  error: researchError
+};
+
+// The sheet is anchored to the bottom edge, so its height is the position of
+// its top edge. It travels between states instead of cutting.
+const sheetHeightSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.move.damping,
+  response: Motion.PRESETS.move.response,
+  onUpdate: (value) => { researchSheet.style.height = `${value}px`; },
+  // Released back to the content once it has arrived: a state that grows a row
+  // later should still be able to size itself.
+  onRest: () => { researchSheet.style.height = ""; }
+});
+
 function showBlock(name) {
+  const onScreen = sheetSpring.value > 0.5 && !researchSheet.classList.contains("hidden");
+  const from = onScreen ? researchSheet.offsetHeight : 0;
+
+  // Every leaving block is pinned where it already is, before the incoming one
+  // is revealed: pinned first, or the reveal moves it before it is measured.
   Object.keys(blockSprings).forEach((key) => {
+    if (key === name) return;
     const spring = blockSprings[key];
-    const element = { plan: researchPlan, run: researchRun, result: researchResult, error: researchError }[key];
-    if (key === name) {
-      element.classList.remove("hidden");
-      spring.to(1, Motion.PRESETS.snappy);
-    } else if (spring.target > 0) {
-      spring.to(0, Motion.PRESETS.snappy);
-    }
+    if (spring.target <= 0) return;
+    const element = RESEARCH_BLOCKS[key];
+    element.style.top = `${element.offsetTop - researchSheet.clientTop}px`;
+    element.classList.add("is-leaving");
+    element.style.willChange = "transform, opacity, filter";
+    spring.to(0, blockTransition());
   });
+
+  const incoming = RESEARCH_BLOCKS[name];
+  incoming.classList.remove("hidden");
+  incoming.classList.remove("is-leaving");
+  incoming.style.top = "";
+  incoming.style.willChange = "transform, opacity, filter";
+  blockSprings[name].to(1, blockTransition());
+
+  if (!from) return;
+  researchSheet.style.height = "";
+  const to = researchSheet.offsetHeight;
+  if (!to || to === from) return;
+  sheetHeightSpring.set(from);
+  researchSheet.style.height = `${from}px`;
+  sheetHeightSpring.to(to, Motion.PRESETS.move);
 }
 
 // Sheet presentation --------------------------------------------------------
 
 function isSheetOpen() {
   return sheetSpring.target > 0.5;
+}
+
+// The room the sheet may take, measured rather than assumed: it stops below
+// the header, so the settings button — the only way into the settings view —
+// stays reachable, and two translucent surfaces never stack on each other.
+function measureSheetBounds() {
+  const room = mainView.getBoundingClientRect().bottom -
+               mainHeader.getBoundingClientRect().bottom - SHEET_HEADER_GAP;
+  if (room > 0) researchSheet.style.maxHeight = `${room}px`;
+}
+
+// The travel is the sheet's own height, and that height belongs to the state
+// it is showing — so it is re-measured whenever the surface resizes, not once
+// per open. A stale travel leaves a strip of sheet on screen at rest and sends
+// a drag-dismissal to the wrong place.
+function measureSheetTravel() {
+  const height = researchSheet.offsetHeight;
+  if (!height) return;
+  sheetTravel = height;
+  renderSheet(sheetSpring.value);
 }
 
 function openSheet(options) {
@@ -1407,20 +1519,24 @@ function openSheet(options) {
   mainView.classList.add("research-open");
   centerSection.inert = true;
   centerSection.setAttribute("aria-hidden", "true");
-  // Re-measured on every open: each state is a different height, and the
-  // travel distance is the sheet's own height, not a constant.
-  sheetTravel = researchSheet.offsetHeight || sheetTravel;
+  measureSheetBounds();
+  measureSheetTravel();
+  // The segments have no layout while the sheet is hidden, so the selection
+  // pill takes its place the moment the surface has one.
+  syncSegmentIndicator({ immediate: true });
+  researchSheet.style.willChange = "transform, filter";
   if (opts.immediate) {
     sheetSpring.set(1);
     renderSheet(1);
   } else {
-    sheetSpring.to(1, Motion.PRESETS.sheet);
+    sheetSpring.to(1, sheetTransition());
   }
 }
 
 function closeSheet() {
   if (!isSheetOpen()) return;
-  sheetSpring.to(0, Motion.PRESETS.sheet);
+  researchSheet.style.willChange = "transform, filter";
+  sheetSpring.to(0, sheetTransition());
   // The field raised the sheet, so the field gets the focus back.
   researchInput.focus({ preventScroll: true });
 }
@@ -1431,9 +1547,15 @@ function initSheetGesture() {
   Motion.draggable(researchSheet, {
     axis: "y",
     threshold: 10,
-    canStart: (event) => isSheetOpen() &&
+    // Gated on the live value, never on the target: a sheet the user grabs
+    // while it is animating closed is still on screen and still theirs. The
+    // drag then continues from that presentation value, so nothing jumps.
+    canStart: (event) => sheetSpring.value > 0.02 &&
       !event.target.closest("button, input, .research-sources, .research-failed-list"),
-    onStart: () => { startProgress = sheetSpring.value; },
+    onStart: () => {
+      startProgress = sheetSpring.value;
+      researchSheet.style.willChange = "transform, filter";
+    },
     onMove: ({ delta }) => trackSheet(startProgress, delta),
     onEnd: ({ delta, velocity, cancelled }) => {
       if (cancelled) { sheetSpring.to(startProgress, Motion.PRESETS.move); return; }
@@ -1458,11 +1580,9 @@ function settleSheet(progress, velocityPxPerSecond) {
   const decisive = Math.abs(velocityPxPerSecond) > 120;
   const target = decisive ? (velocityPxPerSecond > 0 ? 0 : 1) : (projected > 0.5 ? 1 : 0);
 
-  sheetSpring.to(target, {
-    damping: Motion.PRESETS.sheet.damping,
-    response: Motion.PRESETS.sheet.response,
+  sheetSpring.to(target, sheetTransition({
     velocity: -velocityPxPerSecond / sheetTravel
-  });
+  }));
   if (target === 0) researchInput.focus({ preventScroll: true });
 }
 
@@ -1477,6 +1597,7 @@ function setResearchSourceCount(value, options) {
     btn.setAttribute("aria-checked", selected ? "true" : "false");
     btn.tabIndex = selected ? 0 : -1;
   });
+  syncSegmentIndicator();
   if (!options || options.persist !== false) saveSettings();
 }
 
@@ -1489,6 +1610,44 @@ function setResearchCapture(value, options) {
     radio.checked = radio.value === mode;
   });
   if (!options || options.persist !== false) saveSettings();
+}
+
+// One pill, moved between the segments by two springs — position and width
+// are independent, so they never desync — instead of a background that
+// disappears from one button and reappears on another.
+const segmentXSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.snappy.damping,
+  response: Motion.PRESETS.snappy.response,
+  onUpdate: (value) => {
+    researchSegmentIndicator.style.transform = `translate3d(${value}px, 0, 0)`;
+  },
+  onRest: () => { researchSegmentIndicator.style.willChange = ""; }
+});
+
+const segmentWidthSpring = new Motion.Spring(0, {
+  damping: Motion.PRESETS.snappy.damping,
+  response: Motion.PRESETS.snappy.response,
+  onUpdate: (value) => {
+    researchSegmentIndicator.style.width = `${value}px`;
+  }
+});
+
+function syncSegmentIndicator(options) {
+  const opts = options || {};
+  const selected = researchSegments.querySelector(".segment-btn.is-selected");
+  // No layout yet: the sheet is still hidden, and openSheet syncs on arrival.
+  if (!selected || !selected.offsetWidth) return;
+  const x = selected.offsetLeft;
+  const width = selected.offsetWidth;
+
+  if (opts.immediate) {
+    segmentXSpring.set(x);
+    segmentWidthSpring.set(width);
+    return;
+  }
+  researchSegmentIndicator.style.willChange = "transform, width";
+  segmentXSpring.to(x, Motion.PRESETS.snappy);
+  segmentWidthSpring.to(width, Motion.PRESETS.snappy);
 }
 
 function initSegmentedControl() {
@@ -1621,7 +1780,9 @@ function renderResearch(snapshot) {
 
   updateResearchBar(snapshot);
   announceResearch(snapshot);
-  deliverResearchDocument(snapshot, previous);
+  deliverResearchDocument(snapshot, previous).catch((error) => {
+    showResearchError(error.message, { present: isSheetOpen() });
+  });
   moveResearchFocus(snapshot, previous);
 }
 
@@ -1648,8 +1809,11 @@ function renderRun(snapshot) {
   // Discovery has no denominator, so it gets no determinate progress: an empty
   // bar and an indeterminate progressbar, never a bar that moves for show.
   if (searching) {
+    // Indeterminate is the absence of a value, not a range collapsed to a
+    // point: an aria-valuemax of 0 is read out as "0 percent" by some screen
+    // readers, which is the opposite of what discovery is doing.
     researchTrack.removeAttribute("aria-valuenow");
-    researchTrack.setAttribute("aria-valuemax", "0");
+    researchTrack.removeAttribute("aria-valuemax");
     researchTrack.setAttribute("aria-valuetext", "Finding sources");
     progressSpring.set(0);
     researchFill.style.transform = "scaleX(0)";
@@ -1720,6 +1884,7 @@ function renderSourceRows(snapshot) {
       row.append(glyph, text, note);
       researchSources.appendChild(row);
 
+      row.style.willChange = "transform, opacity";
       const spring = new Motion.Spring(0, {
         damping: Motion.PRESETS.snappy.damping,
         response: Motion.PRESETS.snappy.response,
@@ -1728,7 +1893,10 @@ function renderSourceRows(snapshot) {
           row.style.transform = Motion.prefersReducedMotion()
             ? "none"
             : `translate3d(0, ${(1 - value) * 8}px, 0)`;
-        }
+        },
+        // A row that has arrived is not going to move again; a dozen rows held
+        // as compositor layers for the life of the popup would be.
+        onRest: () => { row.style.willChange = ""; }
       });
       rowSprings.push(spring);
 
@@ -1743,11 +1911,13 @@ function renderSourceRows(snapshot) {
           path.style.transform = Motion.prefersReducedMotion()
             ? "none"
             : `translate3d(${(shown - 1) * 4}px, 0, 0)`;
-        }
+        },
+        onRest: () => { path.style.willChange = ""; }
       }));
 
       if (!stagger || Motion.prefersReducedMotion()) {
         spring.set(1);
+        row.style.willChange = "";
       } else {
         // The stagger points down the list, in the direction the work travels.
         setTimeout(() => spring.to(1, Motion.PRESETS.snappy), index * 40);
@@ -1776,6 +1946,7 @@ function renderSourceRows(snapshot) {
       mark.textContent = rendered ? "rendered" : "";
       mark.hidden = !rendered;
       if (rendered && !Motion.prefersReducedMotion()) {
+        mark.style.willChange = "transform, opacity";
         pathSpring.to(1, Motion.PRESETS.snappy);
       } else {
         // Reduced motion cross-fades the mark in through CSS instead.
@@ -1852,13 +2023,20 @@ function researchFailures(snapshot) {
   return failures;
 }
 
-function showResearchError(message) {
+// `present: false` writes the failure into the sheet without raising it: a
+// failure the user did not ask for — a run whose results expired while the
+// popup was closed — must not throw a surface over a window they opened for
+// something else, and must not fire the alert channel either.
+function showResearchError(message, options) {
+  const present = !options || options.present !== false;
   researchErrorText.textContent = message;
-  researchAlert.textContent = message;
   researchSheet.dataset.state = "error";
   researchSheetTitle.textContent = "Research failed";
   researchInput.readOnly = false;
-  if (!isSheetOpen()) openSheet();
+  if (present) {
+    researchAlert.textContent = message;
+    if (!isSheetOpen()) openSheet();
+  }
   showBlock("error");
 }
 
@@ -1909,19 +2087,41 @@ function announceResearch(snapshot) {
 // The primary key says "Research & Download", so a finished run downloads
 // itself. A cancelled run does not: stopping is not the same as asking for
 // what was collected, so it offers the choice instead.
-function deliverResearchDocument(snapshot, previous) {
+//
+// Once, and once only. The background holds a finished run in `done` for ten
+// minutes and hands that same snapshot to every popup that connects, so a
+// marker living in this window's memory would write the file to Downloads
+// again on every open. It is written to storage instead — which also means the
+// run still delivers itself when it finished with the popup closed.
+function readDeliveredRunId() {
+  return browserAPI.storage.local
+    .get({ [RESEARCH_DELIVERED_KEY]: null })
+    .then((stored) => stored[RESEARCH_DELIVERED_KEY]);
+}
+
+function rememberDeliveredRunId(runId) {
+  return browserAPI.storage.local.set({ [RESEARCH_DELIVERED_KEY]: runId });
+}
+
+async function deliverResearchDocument(snapshot, previous) {
   if (snapshot.phase !== "done") return;
   if (!snapshot.runId || researchDeliveredRunId === snapshot.runId) return;
   if (previous && previous.phase === "done" && previous.runId === snapshot.runId) return;
 
   researchDeliveredRunId = snapshot.runId;
-  requestResearchDocument(snapshot.runId)
-    .then((doc) => {
-      downloadMarkdownFile(doc.filename.replace(/\.md$/, ""), doc.markdown);
-    })
-    .catch((error) => {
-      showResearchError(error.message);
-    });
+  if (await readDeliveredRunId() === snapshot.runId) return;
+
+  try {
+    const doc = await requestResearchDocument(snapshot.runId);
+    downloadMarkdownFile(doc.filename.replace(/\.md$/, ""), doc.markdown);
+    await rememberDeliveredRunId(snapshot.runId);
+  } catch (error) {
+    // The document is gone — the run's ten minutes lapsed — and no later open
+    // can bring it back, so the run is marked delivered rather than asked for
+    // again, and the reason waits in the sheet instead of jumping out of it.
+    await rememberDeliveredRunId(snapshot.runId);
+    showResearchError(error.message, { present: isSheetOpen() });
+  }
 }
 
 function moveResearchFocus(snapshot, previous) {
@@ -2047,6 +2247,10 @@ function initResearch() {
   researchPort = connectResearchPort();
   initSegmentedControl();
   initSheetGesture();
+  // The sheet is a different height in every state, and a state can change
+  // while it is on screen: the travel follows the surface instead of being
+  // sampled once at open time.
+  new ResizeObserver(measureSheetTravel).observe(researchSheet);
   renderSheet(0);
   blockSprings.plan.set(1);
   researchPlan.style.opacity = "1";
