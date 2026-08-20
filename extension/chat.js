@@ -385,12 +385,106 @@ const ScrapLLMChat = (function () {
     };
   }
 
+  // Google closes the answer column with its own furniture: a one-line "AI can
+  // make mistakes" disclaimer, and after a thumbs-down a short feedback panel.
+  // Both are localised — the disclaimer arrives in whatever language the IP
+  // suggests — so they are recognised by shape rather than by phrase: a short
+  // trailing block with no links, list, heading, table or code in it.
+  //
+  // The limits are deliberate. 120 characters keeps a real closing paragraph
+  // (the answer's own "tell me more about X and I can be specific" runs well
+  // past 200), and stopping after three blocks means a mistake trims a line or
+  // two, never the answer.
+  // Known remainder, measured rather than assumed: on a signed-out AI Mode page
+  // two one-line notices survive this pass — the "AI can make mistakes"
+  // disclaimer and one "a copy of this chat will be included" label. They sit
+  // among the answer's own nodes rather than after them, so removing them by
+  // position would mean guessing at the answer's last paragraph. About 90
+  // characters out of 3,900; the panels that used to add 500 are gone.
+  const FURNITURE_MAX_CHARS = 120;
+  // Generous, because what is left after the panels are gone is a run of
+  // one-line labels — a disclaimer, three copies of one notice, a thank-you —
+  // and each is its own block. The 120-character rule is what protects the
+  // answer, not this count.
+  const FURNITURE_MAX_BLOCKS = 14;
+
+  // The share row and the feedback panel are identified by where their links
+  // point. Every string in them is translated; these hosts are not.
+  const SHARE_AND_FEEDBACK_LINKS = [
+    'a[href*="policies.google.com"]',
+    'a[href*="support.google.com/legal"]',
+    'a[href*="facebook.com/sharer"]',
+    'a[href*="twitter.com/intent"]',
+    'a[href*="x.com/intent"]',
+    'a[href*="reddit.com/submit"]',
+    'a[href*="api.whatsapp.com"]',
+    'a[href*="wa.me"]',
+    'a[href*="mail.google.com"]'
+  ].join(', ');
+
+  function isFurniture(element) {
+    const text = (element.textContent || '').trim();
+    if (!text || text.length > FURNITURE_MAX_CHARS) return false;
+    return !element.querySelector('a, ul, ol, h1, h2, h3, h4, table, pre, code, img');
+  }
+
+  function trimGoogleFurniture(root) {
+    // Walk the tail of the document rather than one branch of it: the closing
+    // labels are not siblings of the answer, they are the last elements that
+    // carry text, wherever they happen to hang.
+    for (let removed = 0; removed < FURNITURE_MAX_BLOCKS; removed++) {
+      const blocks = Array.from(root.querySelectorAll('*'))
+        .filter(el => ownTextLength(el) > 0);
+      const last = blocks[blocks.length - 1];
+      if (!last) break;
+      // Climb to the outermost element that still says only this much: the
+      // label usually sits in two or three nested wrappers of its own.
+      let block = last;
+      while (block.parentElement && block.parentElement !== root &&
+             (block.parentElement.textContent || '').trim() === (block.textContent || '').trim()) {
+        block = block.parentElement;
+      }
+      if (!isFurniture(block)) break;
+      block.remove();
+    }
+  }
+
+  function ownTextLength(element) {
+    let length = 0;
+    for (let i = 0; i < element.childNodes.length; i++) {
+      const child = element.childNodes[i];
+      if (child.nodeType === 3) length += (child.nodeValue || '').trim().length;
+    }
+    return length;
+  }
+
   function googleAnswerMarkdown(main, createTurndown) {
     const clone = main.cloneNode(true);
     // Feedback rails, "show more" affordances and the sources carousel are
     // chrome around the answer, not the answer.
+    // The feedback panel first, while it is still recognisable. It is a block of
+    // controls closing with Google's own policy links, and those URLs are the
+    // one part of it that is never translated — unlike every string in it.
+    clone.querySelectorAll(SHARE_AND_FEEDBACK_LINKS)
+      .forEach(link => {
+        const panel = link.closest('div');
+        if (panel && panel !== clone) panel.remove();
+      });
+
+    // Share sheets and feedback prompts are dialogs, and ARIA roles are the one
+    // part of Google's markup that is neither hashed nor translated.
+    clone.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="tooltip"], [role="alert"], [role="status"]')
+      .forEach(node => node.remove());
+
     clone.querySelectorAll('button, [role="button"], [role="navigation"], [role="listbox"], svg, style, script')
       .forEach(node => node.remove());
+
+    // The action rail under the answer — copy, share, good response, bad
+    // response, and the acknowledgement that replaces them — is built from
+    // tooltips the page hides from assistive technology. Google says they are
+    // not content; taking it at its word costs nothing, because the answer
+    // itself is never hidden from a screen reader.
+    clone.querySelectorAll('[aria-hidden="true"]').forEach(node => node.remove());
     // Google hangs a citation chip on the end of most sentences. The chip is an
     // icon, so the link has no text of its own and Turndown writes an empty
     // link — "[](https://…)" — into the middle of the prose. The citation is
@@ -398,6 +492,7 @@ const ScrapLLMChat = (function () {
     clone.querySelectorAll('a').forEach(link => {
       if (!(link.textContent || '').trim()) link.remove();
     });
+    trimGoogleFurniture(clone);
     if (createTurndown) {
       try {
         return createTurndown().turndown(clone.innerHTML).trim();
