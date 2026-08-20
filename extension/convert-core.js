@@ -112,6 +112,10 @@ const ScrapLLMConvert = (function() {
     try {
       const documentClone = doc.implementation.createHTMLDocument('Article');
       documentClone.documentElement.innerHTML = doc.documentElement.innerHTML;
+      // Before Readability, not after: it strips class attributes from what it
+      // returns, so by the time cleanContent runs there is nothing left to
+      // identify an icon font by, and the ligature survives into the Markdown.
+      removeIconLigatures(documentClone.body);
       const reader = new Readability(documentClone);
       const article = reader.parse();
 
@@ -460,6 +464,79 @@ const ScrapLLMConvert = (function() {
   // CONTENT CLEANING
   // ==========================================================================
 
+  // Icon fonts draw a glyph from a ligature, so the element's TEXT is the icon's
+  // NAME. On screen the reader sees an arrow; in Markdown they get the bare word
+  // "arrow_forward" wedged into a sentence, and a page of icon buttons turns
+  // into a list of nouns nobody wrote.
+  //
+  // Two rules keep this from eating real content. Only LEAF elements are
+  // considered, so a card that wraps an icon next to its caption keeps the
+  // caption — which matters on the pages where icon names are the subject, like
+  // an icon gallery. And only a single wordless token is taken: "arrow_forward"
+  // and "expand_more" go, a sentence never does.
+  const ICON_FONT_SELECTOR = [
+    '.material-icons', '.material-icons-outlined', '.material-icons-round',
+    '[class*="material-symbols"]',
+    '.fa', '.fas', '.far', '.fab', '.fal', '.fad',
+    '[class^="fa-"]', '[class*=" fa-"]',
+    '.glyphicon', '[class^="glyphicon-"]',
+    '[class^="bi-"]', '[class*=" bi-"]',
+    'ion-icon',
+    '[class^="ri-"]', '[class*=" ri-"]',
+    '[class*="lucide"]', '[class*="feather-icon"]'
+  ].join(', ');
+
+  const LIGATURE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+
+  // The element's own text, ignoring anything a child contributes.
+  function ownText(node) {
+    let text = '';
+    for (let i = 0; i < node.childNodes.length; i++) {
+      const child = node.childNodes[i];
+      if (child.nodeType === 3) text += child.nodeValue;
+    }
+    return text.trim();
+  }
+
+  function removeIconLigatures(content) {
+    const candidates = content.querySelectorAll(ICON_FONT_SELECTOR);
+    for (let i = 0; i < candidates.length; i++) {
+      const node = candidates[i];
+      if (!node.parentNode) continue;
+
+      if (node.children.length === 0) {
+        const text = (node.textContent || '').trim();
+        if (text && text.length <= 40 && LIGATURE.test(text)) {
+          node.parentNode.removeChild(node);
+        }
+        continue;
+      }
+
+      // Not a leaf, but still an icon: ad scripts and page annotators inject
+      // their own markup inside the icon's span, which would otherwise shield
+      // the ligature from removal. Take the element's own text and leave
+      // whatever was injected to the rules that handle it.
+      const own = ownText(node);
+      if (!own || own.length > 40 || !LIGATURE.test(own)) continue;
+      for (let j = node.childNodes.length - 1; j >= 0; j--) {
+        const child = node.childNodes[j];
+        if (child.nodeType === 3) node.removeChild(child);
+      }
+    }
+
+    // The same shape, declared a second way: an element the page hides from
+    // assistive technology is decoration by the author's own statement.
+    const hidden = content.querySelectorAll('[aria-hidden="true"]');
+    for (let i = 0; i < hidden.length; i++) {
+      const node = hidden[i];
+      if (!node.parentNode || node.children.length > 0) continue;
+      const text = (node.textContent || '').trim();
+      if (text && text.length <= 40 && LIGATURE.test(text)) {
+        node.parentNode.removeChild(node);
+      }
+    }
+  }
+
   function cleanContent(ctx, content, settings) {
     // For fullPage and selection scopes, extract iframes from cloned content.
     // For mainContent scope, this was already done before Readability.
@@ -472,7 +549,7 @@ const ScrapLLMConvert = (function() {
     // Remove elements that shouldn't be included
     const elementsToRemove = [
       'script', 'style', 'noscript',
-      'nav', 'footer', '.comments', '.ads', '.sidebar'
+      'nav', 'footer', '.comments', '.ads', '.sidebar',
     ];
 
     if (!settings.includeImages) {
@@ -487,6 +564,8 @@ const ScrapLLMConvert = (function() {
         }
       }
     });
+
+    removeIconLigatures(content);
 
     // Remove empty paragraphs and divs
     const emptyElements = content.querySelectorAll('p:empty, div:empty');
