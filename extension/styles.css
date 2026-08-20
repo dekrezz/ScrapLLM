@@ -1585,7 +1585,9 @@ input[type="checkbox"] {
   height: 100%;
   width: 100%;
   border-radius: var(--r-pill);
-  background: var(--primary-color);
+  /* The run was started by the yellow key, so its progress is yellow: the
+     colour ties the bar to the action rather than to the system accent. */
+  background: linear-gradient(90deg, var(--action-color-lo), var(--action-color));
   transform: scaleX(0);
   transform-origin: left center;
   will-change: transform;
@@ -1623,6 +1625,13 @@ input[type="checkbox"] {
 
 .research-sources::-webkit-scrollbar-thumb {
   border-radius: var(--r-pill);
+  background: transparent;
+  transition: background var(--t-base);
+}
+
+/* Present when the hand is there, invisible when it is not — the list is the
+   content, the scrollbar is not. */
+.research-sources:hover::-webkit-scrollbar-thumb {
   background: var(--fill-secondary);
 }
 
@@ -1631,7 +1640,17 @@ input[type="checkbox"] {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--gap-sm);
-  padding: 0.25rem 0;
+  /* Rows read as rows: a little breathing room and a rounded field, so the
+     eye can tell where one source ends and the next begins without a rule
+     between them. */
+  padding: 0.3125rem 0.5rem;
+  border-radius: var(--r-sm);
+}
+
+/* Only the source being fetched is lit. Everything else stays flat, so the
+   list has exactly one place the eye is pulled to. */
+.source-row[data-state="fetching"] {
+  background: var(--fill-quaternary);
 }
 
 .source-glyph {
@@ -1751,6 +1770,22 @@ input[type="checkbox"] {
   flex: none;
   max-width: 8rem;
   text-align: right;
+  /* The size of a capture is a number to compare against the other rows, so it
+     is set in the monospaced face with tabular figures: the column lines up
+     and the digits stop shifting as they change. */
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--label-tertiary);
+}
+
+/* A finished capture states its size plainly; the reason a row failed is prose
+   and stays in the reading face. */
+.source-row[data-state="failed"] .source-note,
+.source-row[data-state="skipped"] .source-note {
+  font-family: inherit;
+  font-variant-numeric: normal;
+  letter-spacing: 0.01em;
 }
 
 /* The verbatim reason is what this row exists to say. Right-aligned in 8rem it

@@ -160,8 +160,6 @@ bash scripts/build.sh --version 2.3.0 all
 
 Packages land in `dist/`.
 
-## Credits and licence
+## Licence
 
-ScrapLLM is a derivative of [LLMFeeder](https://github.com/jatinkrmalik/LLMFeeder) by Jatin K Malik, rebuilt with a new interface, gesture and motion system, and site-aware extractors for Reddit, X, chats and selections.
-
-MIT — see [LICENSE](LICENSE), which keeps the original copyright alongside ours.
+MIT — see [LICENSE](LICENSE).
