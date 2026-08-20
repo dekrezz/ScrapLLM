@@ -484,8 +484,10 @@ research passes 3; neither has its own copy of the loop.
 
 Tests live in `tests/research.test.js`: fixture-driven parsing and filtering for
 `search.js`, and a fake `browserAPI` plus jest fake timers for the engine —
-concurrency, cancellation bookkeeping, the budget, orphan recovery and the
-document builder. Write them, never run them.
+concurrency, cancellation bookkeeping, the budget, orphan recovery, the retry
+ladder, the wall and replacement bookkeeping and the document builder.
+`tests/source-quality.test.js` scores the junk filter against the calibration
+corpus and pins the duplicate threshold. Write them, never run them.
 
 Run state lives in `storage.session` when the browser has it (Chrome, Firefox
 115+) and in a module variable otherwise; either way `recoverOrphans()` runs at

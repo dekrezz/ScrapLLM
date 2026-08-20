@@ -39,6 +39,34 @@ Each source says which path it took — `host · rendered` on its row in the pop
 
 The quiet path needs read access to the sites it fetches. That is an **optional** permission, asked for from the Research button the first time you use it. Declining it is not a failure: the run falls back to a tab per source, which needs no permission, and says so once. What you lose is quiet, never capability.
 
+### When a source resists
+
+A source is not captured once and dropped if that fails. Each one gets a ladder: the quiet fetch, then a background tab when the fetched HTML cannot answer for the page, then **one** delayed retry of both — 3 s plus up to 2 s of jitter, so three sources that all met the same rate limiter do not come back together. There is no third pass, and a retry is only started when the delay plus a whole capture still fits in the run's 4 minutes; otherwise you get the failure you needed to read instead of a budget message. A source that only worked the second time says so, on its row and in the document, and one that failed twice carries both halves in one sentence: `<first failure>; the retry 3 s later failed too: <second failure>`.
+
+What earns a retry is decided by what went wrong, not by chance:
+
+| | Example | Retried |
+|---|---|---|
+| **Transient** | network failure, timeout, 5xx, an unrendered shell, a tab that never became scriptable | yes |
+| **Wall** | an active bot challenge, a repeated 401/403/429, a hard paywall, a login or consent gate that yielded nothing in a tab either | no |
+| **Unusable** | a PDF or other non-HTML type, a 404 or 410, a private address, a body over 5 MB | no |
+
+A wall reads as **skipped**, not as an error — the page did not fail to be captured, it refused to be — so the popup draws it as a muted dash and the result card counts the kinds apart ("2 failed, 1 skipped, 1 dropped by the filter") instead of calling everything a failure. Cancelling therefore leaves you with a list of skips rather than a column of red.
+
+Bot checks are recognised by the markers only a challenge page carries (Cloudflare, DataDome, PerimeterX, Imperva); a plain hCaptcha or reCAPTCHA script counts only when the response backs it up — a body under 60 KB or a non-2xx status — so an article with a captcha on its contact form is still an article. This is measured: fetching three unrelated sites in the background returned the same 5.7 KB "Just a moment..." interstitial with no article in it. The first 401/403/429 still gets its tab, because your own session is there and this fetch's is not; a second one of the same status gets nothing.
+
+### The junk filter
+
+Every capture is scored as Markdown — the same artefact on both paths — so a page is judged by what would actually reach the model. The signals are ad-and-promo phrase density, calls to action, link-text share and links per 100 words, affiliate-shaped targets, repeated lines, how little of the page is written in paragraphs, thin content, heading-to-substance ratio, and overlap with your question. A page is dropped at 100 points and no single signal reaches that on its own, so a rejection always rests on at least two independent measurements. Near-duplicates are caught by comparing 6-word shingles (Jaccard 0.75).
+
+Two things it deliberately does *not* treat as spam: **a short page** (thinness tops out at 35 points — a 60-word release note is exactly the source a run wants) and **a price** (money is not measured at all; only promotional phrasing is, so a pricing page and a hardware review survive).
+
+The thresholds are calibrated on real pages captured through the extension's own path: 10 affiliate, coupon and paid-signal landings against 14 genuine ones (MDN, Wikipedia, the Rust book, CPython and SQLite release notes, tokio's tutorial, curl's changelog, Proton's pricing page, TechRadar's VPN deals). Every spam page that converted at all was rejected, at 100–135; the highest-scoring genuine page reached 70 (curl's changelog: 136k words, 53% link text) and the next 55. The duplicate line sits in a gap just as wide — the one mirrored pair scored 0.937, every other pair under 0.02, including two encyclopedia articles on the same subject. The filter is one switch in Settings, on by default, because the thresholds are measurements and not preferences.
+
+### Replacements
+
+Discovery keeps what it ranked but did not need. Whenever a source ends without a capture — skipped at a wall, dropped by the filter, or failed after its retry — the next reserve is promoted and captured in its place, until the reserves run out or there is not enough of the run's budget left to capture anything with. A promoted row is appended to the list, marked "replacement", and the progress bar re-targets to the true ratio so bar and count cannot disagree. Nothing is hidden: the source it replaced keeps its verbatim reason in `### Not fetched`, and the front matter states whether the filter was on, how many pages it dropped and how many replacements were pulled in.
+
 What it does *not* do, and why:
 
 - **It is not a browsing agent.** One query, one round of results — it does not follow links, reformulate the question, or read the pages it downloads.
@@ -92,6 +120,7 @@ Rebind them at `chrome://extensions/shortcuts` or in Firefox's add-on manager.
 - **X** — replies on/off and a cap on posts
 - **Chat** — how many exchanges to copy (defaults to the last 10, not the whole thread)
 - **Research** — how many sources one run tries to capture (5, 8 or 12), on the research sheet itself
+- **Quality filter** — *Drop low-value sources and replace them* (on by default): scores every captured page, drops affiliate and coupon spam, paid-signal landings and copies of a page already captured, and promotes the next search result in place of each drop
 - **Capture** — *Quiet* (the default: read sources without a tab, falling back to one only where a page needs it) or *Always render*, which opens a background tab for every source
 - **Token counter**, **debug logging**, **lazy-load auto-scroll**
 
@@ -114,6 +143,7 @@ extension/
 ├── search.js            Research: DuckDuckGo source discovery (background only)
 ├── quiet-capture.js      Research: credential-less fetch, guards, escalation signals
 ├── research.js          Research: run engine, capture paths, merged document
+├── source-quality.js     Research: the junk and duplicate filter (pure, background only)
 ├── token-counter.js     Token estimation
 ├── background.js        Keyboard shortcuts, context menus, multi-tab work, research port
 ├── offscreen.html/js     Chrome only: the DOM the MV3 worker does not have
