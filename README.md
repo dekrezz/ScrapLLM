@@ -21,7 +21,7 @@ Site-aware extraction where the generic path loses the point:
 
 - **Reddit** — the post plus its full comment tree (author, score, flair, nesting), read from Reddit's own JSON so collapsed replies survive.
 - **X (Twitter)** — threads with replies, quoted posts and engagement counts; profiles and timelines as an index.
-- **Chats** — ChatGPT, Claude, Gemini, Grok, Perplexity, DeepSeek, Copilot, Cursor, and self-hosted front-ends on a local port (Open WebUI, LibreChat, LobeChat, AnythingLLM, Jan). On ChatGPT and Claude the transcript comes from the site's own API and follows the branch you actually see, so messages you edited away stay out.
+- **Chats** — ChatGPT, Claude, Gemini, Google AI Mode, Grok, Perplexity, DeepSeek, Copilot, Cursor, and self-hosted front-ends on a local port (Open WebUI, LibreChat, LobeChat, AnythingLLM, Jan). On ChatGPT and Claude the transcript comes from the site's own API and follows the branch you actually see, so messages you edited away stay out.
 
 ## Research
 

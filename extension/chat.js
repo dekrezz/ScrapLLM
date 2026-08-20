@@ -59,6 +59,17 @@ const ScrapLLMChat = (function () {
       dom: { turn: 'article[data-testid^="conversation-turn"], [data-message-author-role]' }
     },
     {
+      id: 'google-ai',
+      label: 'Google AI Mode',
+      // google.com, google.co.uk, google.de… all serve it from /search, and the
+      // udm parameter is what separates the AI conversation from a plain result
+      // page on the very same path.
+      host: /(^|\.)google\.[a-z]{2,3}(?:\.[a-z]{2})?$/i,
+      thread: /^\/search/i,
+      query: (search) => new URLSearchParams(search).get('udm') === '50',
+      extract: extractGoogleAiMode
+    },
+    {
       id: 'gemini',
       label: 'Gemini',
       host: /(^|\.)gemini\.google\.com$/i,
@@ -120,7 +131,11 @@ const ScrapLLMChat = (function () {
 
   function isThreadUrl(site, location) {
     const loc = location || window.location;
-    return !site.thread || site.thread.test(loc.pathname);
+    if (site.thread && !site.thread.test(loc.pathname)) return false;
+    // Some surfaces live on a path they share with something else entirely and
+    // are told apart by the query string.
+    if (site.query && !site.query(loc.search || '')) return false;
+    return true;
   }
 
   // ==========================================================================
@@ -340,6 +355,59 @@ const ScrapLLMChat = (function () {
     return attribute || '';
   }
 
+  // Google's AI Mode is a conversation that does not look like one in the DOM:
+  // there are no author-role attributes, no per-turn elements, and the class
+  // names are build hashes that change without notice. Two things are stable —
+  // the question is in the URL's q parameter, and the answer is Google's own
+  // result column, data-container-id="main-col", which has been that for years.
+  //
+  // Signed out, the surface allows exactly one exchange. Signed in it allows
+  // more, and each answer is appended to the same column; the follow-up
+  // questions are rendered as headings whose text Google localises, so they are
+  // read from the transcript rather than matched by a phrase.
+  function extractGoogleAiMode(createTurndown) {
+    const main = document.querySelector('[data-container-id="main-col"]');
+    if (!main) return null;
+
+    const query = new URLSearchParams(window.location.search).get('q') || '';
+    const answer = googleAnswerMarkdown(main, createTurndown);
+    if (!answer) return null;
+
+    const messages = [];
+    if (query.trim()) messages.push({ role: 'user', text: query.trim(), time: '' });
+    messages.push({ role: 'assistant', text: answer, time: '' });
+
+    logger.log('Google AI Mode captured', { question: query.length, answer: answer.length });
+
+    return {
+      title: query.trim() || document.title,
+      messages
+    };
+  }
+
+  function googleAnswerMarkdown(main, createTurndown) {
+    const clone = main.cloneNode(true);
+    // Feedback rails, "show more" affordances and the sources carousel are
+    // chrome around the answer, not the answer.
+    clone.querySelectorAll('button, [role="button"], [role="navigation"], [role="listbox"], svg, style, script')
+      .forEach(node => node.remove());
+    // Google hangs a citation chip on the end of most sentences. The chip is an
+    // icon, so the link has no text of its own and Turndown writes an empty
+    // link — "[](https://…)" — into the middle of the prose. The citation is
+    // worth nothing without its label, and the sentence reads worse with it.
+    clone.querySelectorAll('a').forEach(link => {
+      if (!(link.textContent || '').trim()) link.remove();
+    });
+    if (createTurndown) {
+      try {
+        return createTurndown().turndown(clone.innerHTML).trim();
+      } catch (error) {
+        logger.error('Turndown failed on the AI Mode answer', error);
+      }
+    }
+    return (clone.textContent || '').trim();
+  }
+
   // ==========================================================================
   // EXCHANGES
   // ==========================================================================
@@ -444,7 +512,7 @@ const ScrapLLMChat = (function () {
     // require the page to say who is speaking on most turns — otherwise a
     // comment thread or a forum would light the button up on a page that has
     // no conversation to copy.
-    const knownChat = !!site && onThread && (!!site.api || turns.length >= 2);
+    const knownChat = !!site && onThread && (!!site.api || !!site.extract || turns.length >= 2);
     const looksLikeChat = turns.length >= 4 && labelled >= Math.ceil(turns.length / 2);
 
     return {
@@ -472,6 +540,15 @@ const ScrapLLMChat = (function () {
         // The API is the better source, not the only one: fall through to the
         // DOM rather than failing the copy outright.
         logger.error(`${site.label} API unavailable, using the rendered page`, error);
+      }
+    }
+
+    // A site with its own extractor knows something the generic reader cannot
+    // work out from the markup alone.
+    if (site && site.extract && isThreadUrl(site, window.location)) {
+      const captured = site.extract(createTurndown);
+      if (captured && captured.messages.length) {
+        return render(captured, site, settings || {});
       }
     }
 

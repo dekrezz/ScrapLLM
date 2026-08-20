@@ -86,6 +86,15 @@ deliberately conservative — four or more turns *and* explicit role markers on
 most of them — so a comment thread does not light the button up.
 `chatExchangeLimit` defaults to 10 exchanges, not 'all'.
 
+Google's AI Mode is handled by its own extractor rather than the role heuristic:
+it has no per-turn elements and its class names are build hashes, but two things
+are stable — the question is the URL's q parameter and the answer is Google's own
+result column, `data-container-id="main-col"`. It lives on `/search`, the same
+path as an ordinary result page, so the registry entry carries a `query` guard
+(`udm=50`) alongside the path test; without it every Google search would offer to
+copy a conversation. Citation chips are icon-only links, so they are dropped
+before conversion — otherwise every second sentence ends in an empty link.
+
 **`reddit.js`** — the post plus its comment tree from Reddit's own JSON, fetched
 same-origin (no extra host permission, and the user's session applies). Falls
 back to scraping `shreddit-*` or old.reddit markup when the JSON endpoint
