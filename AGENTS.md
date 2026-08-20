@@ -243,7 +243,12 @@ verbatim `reason`:
 A `wall` row reads as `skipped` rather than `error`: the page did not fail to
 be captured, it refused to be, which is the same kind of event as a page the
 quality gate drops. `unusable` keeps `error`, because a PDF or a private
-address is a source the run could never have used.
+address is a source the run could never have used. The popup draws the two
+differently — a muted dash for a skip, the red exclamation only for a genuine
+failure — off `entry.category`, and the result card counts them apart
+("2 failed, 1 skipped, 1 dropped by the filter") instead of calling every
+non-success a failure. Cancelling a run therefore repaints the list as skips,
+which is what the user just asked for, not as a column of errors.
 
 The wall detectors extend the signals that were already measured rather than
 duplicating them. `botChallengeReason` matches the vendor markers a challenge
@@ -261,8 +266,9 @@ capture.
 The 401/403/429 rule is deliberately split: the *first* one still escalates,
 because the user's own tab carries the session this fetch does not; a *repeat*
 of the same status is a wall and gets no third request (`seenStatuses` is what
-the source has already been answered with, and it is recorded before the
-classification runs). A hard paywall is a wall on first sight — the tab renders
+the source has already been answered with, and the current response is added to
+it *after* the classification has run — recording it first made every first
+block look like a repeat of itself, so no tab was ever opened). A hard paywall is a wall on first sight — the tab renders
 the same offer page — while a login or consent gate is given its one tab and is
 called a wall only once that tab has been spent (`attempt > 1`).
 
@@ -275,7 +281,16 @@ repeated-line share, how much of the page is written in paragraphs at all,
 thin content, heading-to-substance ratio, and overlap with the user's query.
 Points accumulate and a page is dropped at `JUNK_SCORE_THRESHOLD` (100); no
 single signal reaches it except a paid-signal/VIP-channel pitch seen twice, so
-a rejection always rests on at least two independent measurements. Near
+a rejection always rests on at least two independent measurements. That tier is
+reserved for phrases that name the sale themselves (`vip channel`,
+`premium signals`, `guaranteed profit`, `win rate of 92%`). Naming a chat
+channel is *not* one of them: "signal channel" is how every Go article writes
+`make(chan os.Signal)`, and a newspaper, an encyclopedia and a platform help
+page all say "Telegram channel" or "WhatsApp group" in earnest. Those count
+only when a monetisation cue — a price, a tier, a promised return — is written
+within 120 characters of them, and even two of them plus the thinness score
+stay under the threshold, so such a page still needs a second, unrelated
+signal. Near
 duplicates are caught with 6-word shingles hashed FNV-1a and compared by
 Jaccard against everything already kept in the run.
 
@@ -365,7 +380,15 @@ tabs into the new run's record — where orphan recovery would never find them.
 `recoverOrphans()` closes the offscreen document *before* it reads the persisted
 state, because when `storage.session` is unavailable that state lived in a
 module variable that died with the worker, and the orphaned document is exactly
-what has to be closed in that case.
+what has to be closed in that case. It runs once, behind a promise `start()`
+waits on: recovery is a sequence of awaits, and a run created in the middle of
+them used to have its own record read, cleared and reported as interrupted. It
+also re-checks the live run after every await and never touches a record whose
+`runId` is the run in progress. Only a run that was still `searching` or
+`running` comes back as `interrupted`; a stored `done` or `cancelled` is
+restored as itself, with its counts recomputed from the entries, because the
+document is still in storage for the rest of `RESULT_RETENTION_MS` and the
+error block offers no way back to it.
 
 | Constant | Value |
 |----------|-------|
@@ -382,6 +405,21 @@ what has to be closed in that case.
 | `RETRY_BASE_DELAY_MS` / `RETRY_JITTER_MS` | 3000 / 2000 |
 | `RETRY_MIN_REMAINING_MS` / `REPLACEMENT_MIN_REMAINING_MS` | 40000 / 45000 |
 | `JUNK_SCORE_THRESHOLD` / `DUPLICATE_JACCARD` (source-quality.js) | 100 / 0.75 |
+
+`PARSE_TIMEOUT_MS` times the parse, not the wait for one. The offscreen
+document is a single JS thread and its `convertHtml` is synchronous, so the
+three concurrent sources are dispatched through a queue in `research.js` and
+each one's 5 s starts when the thread is actually free; the next parse waits for
+the send itself rather than for the timeout, because a parse this side has given
+up on still holds that thread. Opening the document — which also loads
+readability.js, turndown.js and convert-core.js on the first capture — is not
+charged to any page's parse budget; it has the run's.
+
+`waitForScriptable` clamps its 20 s to the run's deadline, and says which limit
+ran out: past the deadline the source ends with the budget message and category
+`budget`, not with "Page did not become scriptable within 20 s". `captureInTab`
+re-checks the deadline before it creates the tab, so no window opens for a
+capture the run has no time to finish.
 
 Every constant above is a guard, not a preference. 20 s of ping polling is what
 separates "the page is slow" from "nothing will ever run here" (a PDF in the
@@ -484,8 +522,31 @@ run.
 3. **Gestures track 1:1, then hand off velocity.** `Motion.draggable()` gives
    pointer capture and a release velocity; `Motion.project()` picks the landing
    target from where the flick is going; `Motion.rubberband()` resists at edges.
+   Capture is taken on `pointerdown`, not once the gesture engages: a surface
+   that is already animating slides out from under the finger, and without
+   capture the moves that would engage the drag land on whatever is now under
+   the pointer — which is exactly the case a closing sheet has to survive.
 4. **Chrome is a material** — translucent layers with content passing under, and
-   a scroll-edge mask instead of divider lines.
+   a scroll-edge mask instead of divider lines. Never two light translucent
+   layers on top of each other: while the run sheet is up the bar is the solid
+   one (`#mainView.research-open .research-bar`), so the boundary between the
+   task surface and the field that raised it stays visible. The source list's
+   mask is driven from its scroll position, so each edge fades only while there
+   is content past it.
+5. **The blur belongs to the enter and the exit.** The sheet's `filter` is a
+   spring-driven materialisation; a drag turns it off and leaves it off until
+   the surface rests, because content under the finger must stay itself (and a
+   full-surface filter re-rasterises the sheet on every pointermove).
+6. **Escape dismisses, it never destroys.** Escape closes the sheet whether or
+   not a run is going — dismissing by drag already leaves the run alive, so the
+   keyboard form of the gesture cannot instead cancel four minutes of work.
+   Cancelling stays on the Cancel button, which is on screen in that state.
+7. **Rows are keyed by what they show.** The source list reconciles on
+   `entry.url`: the engine can promote a reserve mid-run, and rebuilding the
+   list on the new count restarted every spinner and threw away every row's
+   arrival spring. A promoted row is appended, animated in like the others and
+   marked "replacement", and the progress bar re-targets to the true ratio when
+   the denominator changes so bar and count cannot disagree.
 
 | Export | Purpose |
 |--------|---------|
