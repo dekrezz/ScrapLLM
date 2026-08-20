@@ -388,6 +388,26 @@ const ScrapLLMSourceQuality = (function() {
       }
     }
 
+    // Two combinations that the individual weights miss, because each of their
+    // parts is innocent alone and only the pairing is damning. Measured on real
+    // pages: a link farm scores 40 from its parts and a stub scores 35, both far
+    // under the threshold, while every genuine page in the corpus fails at least
+    // one half of each pair.
+    //
+    // A page of substance about something else is a research answer we simply
+    // did not ask for; a page about something else that is also not written in
+    // prose is a link farm the search engine handed us.
+    //
+    // Deliberately NOT handled here: a page that extracts to almost nothing.
+    // Anything under quiet-capture's MIN_TEXT_CHARS never reaches this filter —
+    // it is escalated to a tab first and then recorded as a failed capture, and
+    // a rule here would only relabel a data-heavy page Readability cannot read
+    // (caniuse.com extracts 43 words) as spam, which it is not.
+    if (stats.queryTermCount >= 2 && stats.queryTermsMatched === 0 &&
+        stats.wordCount >= 120 && stats.substantialWordShare < 0.4) {
+      add(100, 'the page is about something else and is a list of links rather than prose');
+    }
+
     return reasons;
   }
 

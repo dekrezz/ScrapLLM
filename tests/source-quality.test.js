@@ -281,4 +281,42 @@ describe('ScrapLLMSourceQuality.measure', () => {
     expect(stats.promoPer1000).toBe(0);
     expect(stats.ctaPer1000).toBe(0);
   });
+
+  // Measured on freesoccertips.eu, which scored 40 against a threshold of 100
+  // from its parts alone: off-topic and link-shaped are each innocent by
+  // themselves, and only the pair identifies a link farm.
+  it('rejects a page that is both off-topic and a list of links rather than prose', () => {
+    const linkFarm = Array.from({ length: 60 }, (_, i) =>
+      `* [Match preview number ${i}](https://tips.example.com/match/${i})`).join('\n') +
+      '\n\nDaily picks updated.';
+
+    const verdict = quality.assess(
+      { markdown: linkFarm, title: 'Daily picks', url: 'https://tips.example.com/', query: 'javascript promise chaining' },
+      { query: 'javascript promise chaining', captured: [] }
+    );
+
+    expect(verdict.stats.queryTermsMatched).toBe(0);
+    expect(verdict.stats.substantialWordShare).toBeLessThan(0.4);
+    expect(verdict.verdict).toBe('reject');
+    expect(verdict.reason).toMatch(/about something else/);
+  });
+
+  it('keeps an off-topic page that is written in prose, and a short on-topic one', () => {
+    const prose = Array.from({ length: 40 }, () =>
+      'This paragraph is ordinary written prose about an unrelated subject entirely.').join('\n\n');
+
+    const offTopic = quality.assess(
+      { markdown: prose, title: 'Something else', url: 'https://example.org/a', query: 'javascript promise chaining' },
+      { query: 'javascript promise chaining', captured: [] }
+    );
+    expect(offTopic.verdict).toBe('keep');
+
+    const shortOnTopic = quality.assess(
+      { markdown: 'Promise chaining lets you sequence asynchronous work. ' +
+        'Each then returns a new promise, so the next step waits for the previous one.',
+        title: 'Promise chaining', url: 'https://example.org/b', query: 'javascript promise chaining' },
+      { query: 'javascript promise chaining', captured: [] }
+    );
+    expect(shortOnTopic.verdict).toBe('keep');
+  });
 });
