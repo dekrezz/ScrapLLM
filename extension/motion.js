@@ -214,6 +214,20 @@ const ScrapLLMMotion = (function () {
       if (pointerId !== null || event.button > 0) return;
       if (opts.canStart && !opts.canStart(event)) return;
       pointerId = event.pointerId;
+      // Captured here, not once the gesture engages: a surface that is already
+      // animating keeps moving under the finger, and without capture the very
+      // next pointermove lands somewhere else and the element never hears it —
+      // which is why a closing sheet could not be caught. Capture retargets the
+      // whole sequence to this element, so the gesture is evaluated against the
+      // finger rather than against wherever the surface happens to be.
+      if (typeof element.setPointerCapture === 'function') {
+        try {
+          element.setPointerCapture(event.pointerId);
+        } catch (e) {
+          // A pointer that ended between the hit test and here: the gesture is
+          // simply evaluated without capture, as before.
+        }
+      }
       origin = { main: point(event), cross: cross(event), time: now() };
       engaged = false;
       history.length = 0;
@@ -232,13 +246,15 @@ const ScrapLLMMotion = (function () {
         // of the perpendicular movement).
         if (Math.abs(delta) < threshold) return;
         if (Math.abs(delta) <= Math.abs(crossDelta)) {
+          if (element.hasPointerCapture && element.hasPointerCapture(pointerId)) {
+            element.releasePointerCapture(pointerId);
+          }
           pointerId = null;
           return;
         }
         engaged = true;
         // Re-anchor so the element doesn't jump by the threshold distance.
         origin.main = value - Math.sign(delta) * threshold;
-        element.setPointerCapture(event.pointerId);
         if (opts.onStart) opts.onStart({ delta: value - origin.main, event });
       }
 

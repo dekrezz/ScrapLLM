@@ -1309,11 +1309,14 @@ const SHEET_HEADER_GAP = 8;
 // same snapshot to every popup opened in that window.
 const RESEARCH_DELIVERED_KEY = "researchDeliveredRunId";
 let renderedRunKey = "";
+// The denominator the progress fill was last scaled against.
+let progressTotal = 0;
 let lastSummaryAt = 0;
 let lastSummaryText = "";
 const documentRequests = [];
-const rowSprings = [];
-const pathSprings = [];
+// One record per source row: the node and the springs that belong to it, kept
+// across snapshots so a row is updated rather than rebuilt.
+const sourceRows = new Map();
 
 function prefersReducedTransparency() {
   return typeof matchMedia === "function" &&
@@ -1343,6 +1346,10 @@ function blockTransition() {
     : { damping: Motion.PRESETS.snappy.damping, response: Motion.PRESETS.snappy.response };
 }
 
+// True from the moment a finger takes the sheet until the surface next comes to
+// rest: the blur is suspended for that whole stretch.
+let sheetHeld = false;
+
 const sheetSpring = new Motion.Spring(0, {
   damping: Motion.PRESETS.sheet.damping,
   response: Motion.PRESETS.sheet.response,
@@ -1351,6 +1358,7 @@ const sheetSpring = new Motion.Spring(0, {
     // will-change is a promise about the next few frames, not a property: it
     // is set when the surface is about to move and dropped once it rests.
     researchSheet.style.willChange = "";
+    sheetHeld = false;
     if (spring.value <= 0.001) {
       researchSheet.classList.add("hidden");
       researchScrim.classList.add("hidden");
@@ -1371,7 +1379,15 @@ function renderSheet(value) {
   researchSheet.style.transform = reduced
     ? "none"
     : `translate3d(0, ${(1 - value) * sheetTravel}px, 0) scale(${0.96 + value * 0.04})`;
-  researchSheet.style.filter = flat || value > 0.99 ? "none" : `blur(${(1 - value) * 8}px)`;
+  // The blur is how the surface materialises and dissolves — it belongs to the
+  // enter and the exit. Under the finger the content has to stay itself and
+  // track 1:1, so a drag turns it off (and keeps it off until the surface
+  // rests, because switching it back on at release is a visible pop). A
+  // full-surface filter also re-rasterises the sheet and its backdrop-filter
+  // subtree on every pointermove, which the drag cannot afford.
+  researchSheet.style.filter = flat || sheetHeld || value > 0.99
+    ? "none"
+    : `blur(${(1 - value) * 8}px)`;
   // The same spring, spent on the cross-fade when travel is unwelcome.
   researchSheet.style.opacity = reduced ? String(shown) : "1";
   researchScrim.style.opacity = String(shown);
@@ -1560,7 +1576,9 @@ function initSheetGesture() {
       !event.target.closest("button, input, .research-sources, .research-failed-list"),
     onStart: () => {
       startProgress = sheetSpring.value;
-      researchSheet.style.willChange = "transform, filter";
+      sheetHeld = true;
+      researchSheet.style.willChange = "transform";
+      researchSheet.style.filter = "none";
     },
     onMove: ({ delta }) => trackSheet(startProgress, delta),
     onEnd: ({ delta, velocity, cancelled }) => {
@@ -1828,7 +1846,14 @@ function renderRun(snapshot) {
     researchTrack.setAttribute("aria-valuemax", String(total));
     researchTrack.setAttribute("aria-valuetext", `${snapshot.completed} of ${total} sources fetched`);
     const value = total > 0 ? snapshot.completed / total : 0;
-    if (value > progressSpring.target) progressSpring.to(value, Motion.PRESETS.move);
+    // The fill only ever grows *within* one denominator. When the engine
+    // promotes a reserve the denominator itself grows, and holding the old
+    // fraction would leave the bar claiming more progress than the count beside
+    // it — so a changed total re-targets the bar to the truth, in either
+    // direction, and the monotonic rule resumes from there.
+    const grew = total !== progressTotal;
+    progressTotal = total;
+    if (grew || value > progressSpring.target) progressSpring.to(value, Motion.PRESETS.move);
   }
 
   renderSourceRows(snapshot);
@@ -1839,137 +1864,218 @@ const ROW_STATES = {
   fetching: "fetching",
   ok: "done",
   error: "failed",
-  skipped: "failed"
+  skipped: "skipped"
 };
 
+// A page that refused to be captured, one the quality gate dropped and one the
+// user cancelled did not fail: nothing about them says the run went wrong, so
+// they read as skipped — a muted dash — rather than as red errors. `unusable`
+// and `transient` keep the error glyph: a PDF, a private address and a page
+// that would not load are sources the run tried and could not use.
+const SKIPPED_CATEGORIES = new Set(["wall", "junk", "duplicate", "cancelled", "budget"]);
+
+function rowState(entry) {
+  const state = ROW_STATES[entry.status] || "queued";
+  if (state !== "failed" && state !== "skipped") return state;
+  if (SKIPPED_CATEGORIES.has(entry.category)) return "skipped";
+  if (entry.category === "unusable" || entry.category === "transient") return "failed";
+  return state;
+}
+
+function createSourceRow() {
+  const row = document.createElement("li");
+  row.className = "source-row";
+  row.setAttribute("role", "listitem");
+
+  const glyph = document.createElement("span");
+  glyph.className = "source-glyph";
+  glyph.setAttribute("aria-hidden", "true");
+
+  const text = document.createElement("span");
+  text.className = "source-text";
+  const title = document.createElement("span");
+  title.className = "source-title";
+  const host = document.createElement("span");
+  host.className = "source-host";
+  // The capture path is a property of the source, so it sits on the host
+  // line rather than in the status column. Only a source that needed a
+  // rendering engine says so: marking the common case on every row would
+  // be decoration, and the quiet path is what the run already promised.
+  const path = document.createElement("span");
+  path.className = "source-path";
+  path.setAttribute("aria-hidden", "true");
+  path.hidden = true;
+  // A row that appeared because another source was dropped explains itself:
+  // otherwise the source count grows from 8 to 9 with nothing to account for it.
+  const flag = document.createElement("span");
+  flag.className = "source-path source-flag";
+  flag.setAttribute("aria-hidden", "true");
+  flag.hidden = true;
+  flag.textContent = "replacement";
+  const meta = document.createElement("span");
+  meta.className = "source-meta";
+  meta.append(host, path, flag);
+  text.append(title, meta);
+
+  const note = document.createElement("span");
+  note.className = "source-note";
+
+  row.append(glyph, text, note);
+
+  row.style.willChange = "transform, opacity";
+  const spring = new Motion.Spring(0, {
+    damping: Motion.PRESETS.snappy.damping,
+    response: Motion.PRESETS.snappy.response,
+    onUpdate: (value) => {
+      row.style.opacity = String(Motion.clamp(value, 0, 1));
+      row.style.transform = Motion.prefersReducedMotion()
+        ? "none"
+        : `translate3d(0, ${(1 - value) * 8}px, 0)`;
+    },
+    // A row that has arrived is not going to move again; a dozen rows held
+    // as compositor layers for the life of the popup would be.
+    onRest: () => { row.style.willChange = ""; }
+  });
+
+  // The mark arrives out of the host it belongs to, so it travels the few
+  // pixels from behind it rather than blinking into place.
+  const pathSpring = new Motion.Spring(0, {
+    damping: Motion.PRESETS.snappy.damping,
+    response: Motion.PRESETS.snappy.response,
+    onUpdate: (value) => {
+      const shown = Motion.clamp(value, 0, 1);
+      path.style.opacity = String(shown);
+      path.style.transform = Motion.prefersReducedMotion()
+        ? "none"
+        : `translate3d(${(shown - 1) * 4}px, 0, 0)`;
+    },
+    onRest: () => { path.style.willChange = ""; }
+  });
+
+  return { row, spring, pathSpring, path: "" };
+}
+
+function updateSourceRow(record, entry) {
+  const row = record.row;
+  row.dataset.state = rowState(entry);
+  row.querySelector(".source-title").textContent = entry.title || entry.url;
+  row.querySelector(".source-host").textContent = entry.host;
+  const note = row.querySelector(".source-note");
+  note.textContent = entry.note;
+
+  const flag = row.querySelector(".source-flag");
+  flag.hidden = !entry.replacement;
+
+  // How it was captured, and why it was not captured quietly, are on the row
+  // itself rather than only in the finished document.
+  const wasPath = record.path;
+  const isPath = entry.path || "";
+  record.path = isPath;
+  if (isPath !== wasPath) {
+    const mark = row.querySelector(".source-path");
+    const rendered = isPath === "rendered";
+    mark.textContent = rendered ? "rendered" : "";
+    mark.hidden = !rendered;
+    if (rendered && !Motion.prefersReducedMotion()) {
+      mark.style.willChange = "transform, opacity";
+      record.pathSpring.to(1, Motion.PRESETS.snappy);
+    } else {
+      // Reduced motion cross-fades the mark in through CSS instead.
+      record.pathSpring.set(rendered ? 1 : 0);
+    }
+  }
+
+  const spoken = isPath === "rendered"
+    ? "rendered in a tab"
+    : (isPath === "quiet" ? "read without a tab" : "");
+  // A thin quiet capture is kept, so the caveat travels with it: the note
+  // already ends in "· thin", and the hover text and the label say how thin.
+  const caveat = entry.pathReason || entry.thinNote || "";
+  note.title = caveat ? `${entry.note} — ${caveat}` : entry.note;
+  row.setAttribute("aria-label", [
+    entry.host,
+    entry.note,
+    spoken,
+    caveat,
+    entry.replacement ? "replacing a dropped source" : ""
+  ].filter(Boolean).join(", "));
+}
+
+// The list's scroll-edge fade belongs where content actually passes under an
+// edge: at the top of an unscrolled list there is nothing above the first row,
+// and fading it there dimmed the first title to announce content that does not
+// exist.
+const SOURCE_MASK_FADE = "0.5rem";
+
+function syncSourceMask() {
+  const list = researchSources;
+  const scrollable = list.scrollHeight - list.clientHeight;
+  const atTop = list.scrollTop <= 1;
+  const atBottom = scrollable <= 1 || list.scrollTop >= scrollable - 1;
+  list.style.setProperty("--mask-top", atTop ? "0rem" : SOURCE_MASK_FADE);
+  list.style.setProperty("--mask-bottom", atBottom ? "0rem" : SOURCE_MASK_FADE);
+}
+
+// Rows are keyed by the source they show, not by how many there are: the
+// engine promotes a reserve mid-run, and rebuilding the list on the new count
+// restarted every spinner, threw away every row's arrival spring and dropped
+// the promoted row in with no motion at all.
 function renderSourceRows(snapshot) {
-  const key = `${snapshot.runId}:${snapshot.entries.length}`;
-  const rebuild = key !== renderedRunKey;
+  const fresh = snapshot.runId !== renderedRunKey;
+  if (fresh) {
+    researchSources.textContent = "";
+    sourceRows.clear();
+    renderedRunKey = snapshot.runId || "";
+  }
   // A popup opened mid-run must not animate rows into a state that predates
   // the window: the stagger runs only when every source is still queued, which
   // is exactly the case where nothing has happened yet.
-  const stagger = rebuild && snapshot.entries.every((entry) => entry.status === "pending");
+  const stagger = fresh && snapshot.entries.every((entry) => entry.status === "pending");
+  const seen = new Set();
 
-  if (rebuild) {
-    researchSources.textContent = "";
-    rowSprings.length = 0;
-    pathSprings.length = 0;
-    renderedRunKey = key;
-
-    snapshot.entries.forEach((entry, index) => {
-      const row = document.createElement("li");
-      row.className = "source-row";
-      row.setAttribute("role", "listitem");
-
-      const glyph = document.createElement("span");
-      glyph.className = "source-glyph";
-      glyph.setAttribute("aria-hidden", "true");
-
-      const text = document.createElement("span");
-      text.className = "source-text";
-      const title = document.createElement("span");
-      title.className = "source-title";
-      const host = document.createElement("span");
-      host.className = "source-host";
-      // The capture path is a property of the source, so it sits on the host
-      // line rather than in the status column. Only a source that needed a
-      // rendering engine says so: marking the common case on every row would
-      // be decoration, and the quiet path is what the run already promised.
-      const path = document.createElement("span");
-      path.className = "source-path";
-      path.setAttribute("aria-hidden", "true");
-      path.hidden = true;
-      const meta = document.createElement("span");
-      meta.className = "source-meta";
-      meta.append(host, path);
-      text.append(title, meta);
-
-      const note = document.createElement("span");
-      note.className = "source-note";
-
-      row.append(glyph, text, note);
-      researchSources.appendChild(row);
-
-      row.style.willChange = "transform, opacity";
-      const spring = new Motion.Spring(0, {
-        damping: Motion.PRESETS.snappy.damping,
-        response: Motion.PRESETS.snappy.response,
-        onUpdate: (value) => {
-          row.style.opacity = String(Motion.clamp(value, 0, 1));
-          row.style.transform = Motion.prefersReducedMotion()
-            ? "none"
-            : `translate3d(0, ${(1 - value) * 8}px, 0)`;
-        },
-        // A row that has arrived is not going to move again; a dozen rows held
-        // as compositor layers for the life of the popup would be.
-        onRest: () => { row.style.willChange = ""; }
-      });
-      rowSprings.push(spring);
-
-      // The mark arrives out of the host it belongs to, so it travels the few
-      // pixels from behind it rather than blinking into place.
-      pathSprings.push(new Motion.Spring(0, {
-        damping: Motion.PRESETS.snappy.damping,
-        response: Motion.PRESETS.snappy.response,
-        onUpdate: (value) => {
-          const shown = Motion.clamp(value, 0, 1);
-          path.style.opacity = String(shown);
-          path.style.transform = Motion.prefersReducedMotion()
-            ? "none"
-            : `translate3d(${(shown - 1) * 4}px, 0, 0)`;
-        },
-        onRest: () => { path.style.willChange = ""; }
-      }));
-
-      if (!stagger || Motion.prefersReducedMotion()) {
-        spring.set(1);
-        row.style.willChange = "";
-      } else {
-        // The stagger points down the list, in the direction the work travels.
-        setTimeout(() => spring.to(1, Motion.PRESETS.snappy), index * 40);
-      }
-    });
-  }
-
-  const rows = researchSources.children;
   snapshot.entries.forEach((entry, index) => {
-    const row = rows[index];
-    if (!row) return;
-    row.dataset.state = ROW_STATES[entry.status] || "queued";
-    row.querySelector(".source-title").textContent = entry.title || entry.url;
-    row.querySelector(".source-host").textContent = entry.host;
-    const note = row.querySelector(".source-note");
-    note.textContent = entry.note;
-    // How it was captured, and why it was not captured quietly, are on the row
-    // itself rather than only in the finished document.
-    const wasPath = row.dataset.path || "";
-    const isPath = entry.path || "";
-    row.dataset.path = isPath;
-    if (isPath !== wasPath) {
-      const mark = row.querySelector(".source-path");
-      const pathSpring = pathSprings[index];
-      const rendered = isPath === "rendered";
-      mark.textContent = rendered ? "rendered" : "";
-      mark.hidden = !rendered;
-      if (rendered && !Motion.prefersReducedMotion()) {
-        mark.style.willChange = "transform, opacity";
-        pathSpring.to(1, Motion.PRESETS.snappy);
+    // Discovery drops duplicate URLs, so the URL is the identity; the index
+    // suffix only exists so a repeat could never collapse two rows into one.
+    const key = seen.has(entry.url) ? `${entry.url}#${index}` : entry.url;
+    seen.add(key);
+
+    let record = sourceRows.get(key);
+    const arriving = !record;
+    if (arriving) {
+      record = createSourceRow();
+      sourceRows.set(key, record);
+    }
+
+    // Position follows the snapshot, but an existing row is only moved when it
+    // is genuinely out of place: a promoted reserve is appended and nothing
+    // above it is touched.
+    const atIndex = researchSources.children[index];
+    if (atIndex !== record.row) researchSources.insertBefore(record.row, atIndex || null);
+
+    updateSourceRow(record, entry);
+
+    if (arriving) {
+      if (Motion.prefersReducedMotion()) {
+        record.spring.set(1);
+        record.row.style.willChange = "";
+      } else if (stagger) {
+        // The stagger points down the list, in the direction the work travels.
+        setTimeout(() => record.spring.to(1, Motion.PRESETS.snappy), index * 40);
       } else {
-        // Reduced motion cross-fades the mark in through CSS instead.
-        pathSpring.set(rendered ? 1 : 0);
+        // A row that arrives on its own — a promoted reserve — slides in the
+        // same way the first batch did.
+        record.spring.to(1, Motion.PRESETS.snappy);
       }
     }
-    const spoken = isPath === "rendered"
-      ? "rendered in a tab"
-      : (isPath === "quiet" ? "read without a tab" : "");
-    // A thin quiet capture is kept, so the caveat travels with it: the note
-    // already ends in "· thin", and the hover text and the label say how thin.
-    const caveat = entry.pathReason || entry.thinNote || "";
-    note.title = caveat ? `${entry.note} — ${caveat}` : entry.note;
-    row.setAttribute("aria-label", [entry.host, entry.note, spoken, caveat]
-      .filter(Boolean)
-      .join(", "));
   });
+
+  for (const [key, record] of sourceRows) {
+    if (seen.has(key)) continue;
+    record.row.remove();
+    sourceRows.delete(key);
+  }
+
+  syncSourceMask();
 }
 
 function renderResult(snapshot) {
@@ -1998,13 +2104,12 @@ function renderResult(snapshot) {
 
   const failures = researchFailures(snapshot);
   researchFailedToggle.classList.toggle("hidden", failures.length === 0);
-  researchFailedToggle.textContent = failures.length === 1
-    ? "1 source failed"
-    : `${failures.length} sources failed`;
+  researchFailedToggle.textContent = researchFailureSummary(failures);
 
   researchFailedList.textContent = "";
   failures.forEach((failure) => {
     const item = document.createElement("li");
+    item.dataset.state = failure.state;
     const host = document.createElement("span");
     host.className = "source-host";
     host.textContent = failure.host;
@@ -2018,15 +2123,40 @@ function renderResult(snapshot) {
 }
 
 // Nothing is smoothed over: a source that failed and a candidate that was
-// dropped before it was ever opened both keep their verbatim reason.
+// dropped before it was ever opened both keep their verbatim reason — and they
+// are not the same event, so each carries which of the three it was.
 function researchFailures(snapshot) {
   const failures = snapshot.entries
     .filter((entry) => entry.status === "error" || entry.status === "skipped")
-    .map((entry) => ({ host: entry.host, reason: entry.note }));
+    .map((entry) => ({ host: entry.host, reason: entry.note, state: rowState(entry) }));
   snapshot.rejected.forEach((item) => {
-    failures.push({ host: item.host, reason: item.reason });
+    // Scored, dropped and never opened: this candidate did not fail, and it was
+    // not skipped either — the filter never let the run near it.
+    failures.push({ host: item.host, reason: item.reason, state: "dropped" });
   });
   return failures;
+}
+
+// "3 sources failed" over a paywall, a junk page and a candidate the filter
+// dropped told the user the run broke three times, which is not what happened.
+// Each group is counted in its own words and the zero terms are left out.
+function researchFailureSummary(failures) {
+  const counts = { failed: 0, skipped: 0, dropped: 0 };
+  failures.forEach((failure) => {
+    if (failure.state === "failed") counts.failed++;
+    else if (failure.state === "dropped") counts.dropped++;
+    else counts.skipped++;
+  });
+
+  const parts = [];
+  if (counts.failed) parts.push(`${counts.failed} failed`);
+  if (counts.skipped) parts.push(`${counts.skipped} skipped`);
+  if (counts.dropped) {
+    parts.push(`${counts.dropped} dropped by the filter`);
+  }
+  const total = counts.failed + counts.skipped + counts.dropped;
+  const noun = total === 1 ? "source" : "sources";
+  return `${total} ${noun}: ${parts.join(", ")}`;
 }
 
 // `present: false` writes the failure into the sheet without raising it: a
@@ -2197,8 +2327,8 @@ async function startResearch() {
   renderedRunKey = "";
   lastSummaryText = "";
   researchSources.textContent = "";
-  rowSprings.length = 0;
-  pathSprings.length = 0;
+  sourceRows.clear();
+  progressTotal = 0;
   progressSpring.set(0);
   researchFill.style.transform = "scaleX(0)";
   researchPhase.textContent = "Finding sources…";
@@ -2240,7 +2370,7 @@ function resetResearch() {
   researchInput.value = "";
   researchInput.readOnly = false;
   researchSources.textContent = "";
-  rowSprings.length = 0;
+  sourceRows.clear();
   researchSheet.dataset.state = "plan";
   researchSheetTitle.textContent = "Research";
   researchCount.hidden = true;
@@ -2329,6 +2459,13 @@ function initResearch() {
 
   researchAgainBtn.addEventListener("click", resetResearch);
 
+  researchSources.addEventListener("scroll", syncSourceMask, { passive: true });
+  // The sheet's blocks animate their height, so the list becomes scrollable a
+  // few frames after the rows are rendered — with no scroll event to notice it.
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(syncSourceMask).observe(researchSources);
+  }
+
   researchFailedToggle.addEventListener("click", () => {
     const expanded = researchFailedToggle.getAttribute("aria-expanded") === "true";
     researchFailedToggle.setAttribute("aria-expanded", expanded ? "false" : "true");
@@ -2342,9 +2479,12 @@ function initResearch() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (isConvertMenuOpen() || isChatLimitMenuOpen()) return;
-    if (isResearchRunning()) {
-      cancelResearch();
-    } else if (isSheetOpen()) {
+    // Escape dismisses the sheet and nothing else, running or not. Pushing the
+    // sheet away with a drag leaves the run alive and the bar counting, so the
+    // keyboard form of the same gesture must not instead destroy four minutes
+    // of work with no confirmation. Cancelling stays on the Cancel button,
+    // which is on screen in exactly that state.
+    if (isSheetOpen()) {
       closeSheet();
     } else if (researchInput.value) {
       researchInput.value = "";

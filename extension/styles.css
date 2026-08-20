@@ -1253,6 +1253,23 @@ input[type="checkbox"] {
   backdrop-filter: var(--material-blur-lg);
 }
 
+/* Two light translucent layers may never stack: the sheet passes under the bar,
+   and glass on glass erased the boundary between the run surface and the field
+   that raised it. While the sheet is up the bar is the solid one — the sheet
+   keeps the material, because it is the layer the page shows through. The edge
+   is an inset shadow rather than a border so the bar's height, which the sheet
+   pads itself by, does not change when it turns solid. */
+#mainView.research-open .research-bar {
+  background: var(--surface-color);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 var(--separator);
+}
+
+#mainView.research-open .research-bar::before {
+  background: linear-gradient(to top, var(--surface-color), transparent);
+}
+
 /* Scroll edge effect instead of a divider: content dissolves into the bar. */
 .research-bar::before {
   content: "";
@@ -1472,7 +1489,8 @@ input[type="checkbox"] {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.055em;
-  color: var(--label-tertiary);
+  /* Same reason as the host line: this sits on the blurred sheet. */
+  color: var(--label-secondary);
 }
 
 .research-segmented {
@@ -1585,9 +1603,14 @@ input[type="checkbox"] {
   min-height: 6.5rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* A clipped row at the edge says "there is more" without a divider. */
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
-  mask-image: linear-gradient(to bottom, transparent 0, #000 0.5rem, #000 calc(100% - 0.5rem), transparent 100%);
+  /* A clipped row at the edge says "there is more" without a divider — but only
+     where there is more: popup.js drives these two stops from the scroll
+     position, so the first row is not dimmed to announce content above it that
+     does not exist. */
+  --mask-top: 0rem;
+  --mask-bottom: 0.5rem;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--mask-top), #000 calc(100% - var(--mask-bottom)), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--mask-top), #000 calc(100% - var(--mask-bottom)), transparent 100%);
 }
 
 .research-sources::-webkit-scrollbar {
@@ -1605,6 +1628,7 @@ input[type="checkbox"] {
 
 .source-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--gap-sm);
   padding: 0.25rem 0;
@@ -1645,6 +1669,15 @@ input[type="checkbox"] {
   color: var(--error-color);
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.2M12 16.3v.2'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5v5.2M12 16.3v.2'/%3E%3C/svg%3E");
+}
+
+/* Skipped is not failed: a wall, a page the quality gate dropped and a source
+   the user cancelled all ended without a capture, and none of them went wrong.
+   A muted slashed circle says so without the alarm. */
+.source-row[data-state="skipped"] .source-glyph {
+  color: var(--label-secondary);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12h8'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12h8'/%3E%3C/svg%3E");
 }
 
 .source-text {
@@ -1696,20 +1729,41 @@ input[type="checkbox"] {
   margin-right: 0.25rem;
 }
 
+/* Over a blurred, translucent surface flat grey text fails: these two lines sit
+   on the sheet with the main view's yellow action button moving under them, so
+   they take the secondary label and a little more weight rather than the
+   tertiary one. */
 .source-host,
 .source-note {
   font-size: 0.6875rem;
   letter-spacing: 0.01em;
-  color: var(--label-tertiary);
+  color: var(--label-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.source-host {
+  font-weight: 500;
 }
 
 .source-note {
   flex: none;
   max-width: 8rem;
   text-align: right;
+}
+
+/* The verbatim reason is what this row exists to say. Right-aligned in 8rem it
+   was fifteen characters and an ellipsis, readable only on hover, so a row that
+   did not end in a capture gives it a full-width line of its own under the
+   host. A successful row keeps the compact "ok" on the right. */
+.source-row[data-state="failed"] .source-note,
+.source-row[data-state="skipped"] .source-note {
+  flex: 1 0 100%;
+  max-width: none;
+  padding-left: calc(1rem + var(--gap-sm));
+  text-align: left;
+  white-space: normal;
 }
 
 .source-row[data-state="failed"] .source-note {
@@ -1757,7 +1811,7 @@ input[type="checkbox"] {
   margin-left: auto;
   font-size: 0.6875rem;
   letter-spacing: 0.01em;
-  color: var(--label-tertiary);
+  color: var(--label-secondary);
 }
 
 .research-disclosure {
@@ -1790,9 +1844,23 @@ input[type="checkbox"] {
   gap: var(--gap-sm);
 }
 
+.research-failed-list li {
+  flex-wrap: wrap;
+}
+
+/* One list, three kinds of entry, and only one of them is a failure: a page
+   that refused to be captured and a candidate the filter dropped are stated in
+   the ordinary label colour. The reason wraps rather than ellipsing, for the
+   same reason it does on the row. */
 .research-failed-list .source-note {
-  margin-left: auto;
-  max-width: 12rem;
+  flex: 1 0 100%;
+  max-width: none;
+  text-align: left;
+  white-space: normal;
+  color: var(--label-secondary);
+}
+
+.research-failed-list li[data-state="failed"] .source-note {
   color: var(--error-color);
 }
 
@@ -1880,8 +1948,10 @@ input[type="checkbox"] {
     border-bottom-color: var(--separator);
   }
 
-  .settings-content,
-  .research-sources {
+  /* A mask on a solid surface is not a transparency effect, and deleting it
+     left a razor-sharp mid-row clip with nothing in its place, so the source
+     list keeps its scroll edge here. */
+  .settings-content {
     -webkit-mask-image: none;
     mask-image: none;
   }
