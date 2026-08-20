@@ -302,8 +302,15 @@ describe('ScrapLLMSourceQuality.measure', () => {
   });
 
   it('keeps an off-topic page that is written in prose, and a short on-topic one', () => {
-    const prose = Array.from({ length: 40 }, () =>
-      'This paragraph is ordinary written prose about an unrelated subject entirely.').join('\n\n');
+    // Distinct paragraphs on purpose: forty copies of one sentence would be
+    // rejected for repetition, which is a different rule and would hide what
+    // this test is asking about.
+    const subjects = ['harbour cranes', 'alpine botany', 'ceramic glazes', 'tidal charts',
+      'railway signalling', 'bread starters', 'kite design', 'oyster beds'];
+    const prose = Array.from({ length: 40 }, (_, i) =>
+      `Chapter ${i + 1} looks at ${subjects[i % subjects.length]} in some detail, ` +
+      `covering how the practice developed over ${20 + i} years and what changed ` +
+      `when the ${subjects[(i + 3) % subjects.length]} trade shifted north.`).join('\n\n');
 
     const offTopic = quality.assess(
       { markdown: prose, title: 'Something else', url: 'https://example.org/a', query: 'javascript promise chaining' },
