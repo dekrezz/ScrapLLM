@@ -1559,6 +1559,34 @@ input[type="checkbox"] {
   font-size: 0.875rem;
 }
 
+/* Two keys side by side have to read as a pair. The stock secondary carries a
+   hairline ring, which next to the yellow key looks like a cut-out rather than
+   a second key — and a 1px ring around a capsule stairsteps on its curve. Here
+   it gets the same lit-edge treatment as its neighbour, one step quieter. */
+.research-actions .secondary-btn {
+  background: var(--surface-raised);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.dark-theme .research-actions .secondary-btn {
+  background: var(--fill-tertiary);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.32);
+}
+
+.research-actions .secondary-btn:hover {
+  filter: brightness(1.03);
+}
+
+.research-actions .secondary-btn.is-pressed {
+  transform: scale(0.975);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.12);
+}
+
 /* Progress ------------------------------------------------------------- */
 
 .research-phase {
