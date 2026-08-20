@@ -85,16 +85,12 @@ const ScrapLLMSourceQuality = (function() {
     /\bread more\b/g
   ];
 
-  // Paid-signal and "VIP channel" landings. These are unambiguous enough that
-  // two of them decide the page on their own — no honest article about, say,
-  // trading strategy phrases itself as a membership pitch twice.
+  // Paid-signal and "VIP channel" landings. Every phrase here names the sale in
+  // itself, so two of them decide the page on their own — no honest article
+  // about, say, trading strategy phrases itself as a membership pitch twice.
   const SIGNAL_SELLING_PATTERNS = [
     /\bvip (?:channel|group|membership|signals?)\b/g,
     /\b(?:premium|paid|private) signals?\b/g,
-    /\bsignals? (?:channel|group|provider)\b/g,
-    /\bjoin (?:our|my|the) telegram\b/g,
-    /\btelegram channel\b/g,
-    /\bwhatsapp group\b/g,
     /\bguaranteed (?:profit|returns?|winnings?)\b/g,
     /\bdouble your (?:money|investment|deposit)\b/g,
     /\b\d+ ?% (?:daily|weekly|monthly) (?:profit|returns?|roi)\b/g,
@@ -102,6 +98,28 @@ const ScrapLLMSourceQuality = (function() {
     /\binsider (?:picks|tips)\b/g,
     /\bwin(?:ning)? rate of \d+ ?%/g
   ];
+
+  // The same landings also point at a chat channel, but naming one is not a
+  // pitch by itself: "signal channel" is how every Go and Rust article writes
+  // `make(chan os.Signal)`, and a newspaper, a Wikipedia article and a platform
+  // help page all say "Telegram channel" or "WhatsApp group" in earnest. These
+  // count only when the sale is written next to them.
+  const CHANNEL_PITCH_PATTERNS = [
+    /\bsignals? (?:channel|group|provider)\b/g,
+    /\bjoin (?:our|my|the) telegram\b/g,
+    /\btelegram channel\b/g,
+    /\bwhatsapp group\b/g
+  ];
+
+  // What has to be written near a channel mention for it to be a pitch: the
+  // price, the tier, or the return being promised.
+  const MONETISATION_CUE =
+    /\b(?:vip|paid|premium|subscribe|subscription|membership|members only|paying members|profits?|payouts?|roi|win rate|deposit|guaranteed|sign ?up fee|per month|a month|free trial)\b|[$£€]\s?\d/;
+
+  // How far either side of a channel mention the cue may sit: one sentence of
+  // ordinary prose, not the whole page — a pricing table at the foot of an
+  // article must not turn its "Telegram channel" line into a pitch.
+  const MONETISATION_WINDOW = 120;
 
   // Link targets shaped like monetised outbound clicks rather than citations.
   const AFFILIATE_TARGET =
@@ -120,6 +138,23 @@ const ScrapLLMSourceQuality = (function() {
       pattern.lastIndex = 0;
       const found = text.match(pattern);
       if (found) hits += found.length;
+    }
+    return hits;
+  }
+
+  // Matches that only count when a monetisation cue sits within
+  // MONETISATION_WINDOW characters of them, on either side.
+  function countMatchesInContext(text, patterns, cue, window) {
+    let hits = 0;
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const from = Math.max(0, match.index - window);
+        const to = Math.min(text.length, match.index + match[0].length + window);
+        if (cue.test(text.slice(from, to))) hits++;
+        if (match[0].length === 0) pattern.lastIndex++;
+      }
     }
     return hits;
   }
@@ -223,6 +258,9 @@ const ScrapLLMSourceQuality = (function() {
       promoPer1000: countMatches(lower, PROMO_PATTERNS) * per1000,
       ctaPer1000: countMatches(lower, CTA_PATTERNS) * per1000,
       signalSellingHits: countMatches(lower, SIGNAL_SELLING_PATTERNS),
+      channelPitchHits: countMatchesInContext(
+        lower, CHANNEL_PITCH_PATTERNS, MONETISATION_CUE, MONETISATION_WINDOW
+      ),
       queryTermCount: terms.length,
       queryTermsMatched: matchedTerms.length,
       queryOverlap: terms.length ? matchedTerms.length / terms.length : 1
@@ -285,6 +323,15 @@ const ScrapLLMSourceQuality = (function() {
       add(100, `${stats.signalSellingHits} paid-signal or VIP-channel pitches`);
     } else if (stats.signalSellingHits === 1) {
       add(30, 'a paid-signal or VIP-channel pitch');
+    }
+
+    // A channel sold next to its price is a contributing measurement, never a
+    // rejection on its own: even two of them plus the thinness score stay under
+    // the threshold, so a page still needs a second, unrelated signal.
+    if (stats.channelPitchHits >= 2) {
+      add(40, `${stats.channelPitchHits} paid chat-channel pitches`);
+    } else if (stats.channelPitchHits === 1) {
+      add(20, 'a paid chat-channel pitch');
     }
 
     const promo = stats.promoPer1000;

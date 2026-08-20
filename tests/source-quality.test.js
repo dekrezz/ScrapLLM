@@ -99,6 +99,69 @@ describe('ScrapLLMSourceQuality.assess', () => {
     expect(verdict.reason).toContain('paid-signal or VIP-channel pitches');
   });
 
+  it('does not treat "signal channel" in a technical article as a pitch', () => {
+    // The Go idiom for make(chan os.Signal) says "signal channel" in every
+    // other paragraph, and nothing on the page is for sale.
+    const markdown = [
+      'Go\'s os/signal package turns process signals into ordinary channel receives. ' +
+      'You create a signal channel with make(chan os.Signal, 1) and hand it to signal.Notify, ' +
+      'which delivers SIGINT and SIGTERM to that signal channel without blocking the runtime.',
+      'A buffered signal channel matters here: signal.Notify never blocks when it delivers, ' +
+      'so an unbuffered signal channel can drop the notification if the receiver is not ' +
+      'already waiting on it. One slot is enough for a shutdown path.',
+      'Once the signal channel receives, cancel the root context, call server.Shutdown with ' +
+      'a deadline, and wait for the in-flight handlers to return. A handler that ignores ' +
+      'cancellation keeps the process alive until the deadline expires.'
+    ].join('\n\n');
+
+    const verdict = quality.assess({
+      markdown,
+      query: 'go graceful shutdown signal handling',
+      url: 'https://blog.example.com/go-graceful-shutdown'
+    });
+
+    expect(verdict.verdict).toBe('keep');
+    expect(verdict.stats.signalSellingHits).toBe(0);
+    expect(verdict.stats.channelPitchHits).toBe(0);
+  });
+
+  it('does not treat a newsroom promoting its own channel as a pitch', () => {
+    const markdown = [
+      article(4),
+      'For the latest updates, join our Telegram channel or our WhatsApp group.',
+      'Follow our Telegram channel for breaking news alerts throughout the day.'
+    ].join('\n\n');
+
+    const verdict = quality.assess({
+      markdown,
+      query: 'scheduler worker thread ordering',
+      url: 'https://news.example.com/story'
+    });
+
+    expect(verdict.verdict).toBe('keep');
+    expect(verdict.stats.channelPitchHits).toBe(0);
+  });
+
+  it('still rejects a channel sold next to its price', () => {
+    const markdown = [
+      'Join our Telegram channel today and start receiving forex signals from our team.',
+      'Membership is $49 per month for the VIP channel, and paying members get every entry, ' +
+      'stop loss and take profit in real time.',
+      'Our WhatsApp group is included with the subscription. Members only. Join our Telegram ' +
+      'now and see the results for yourself.'
+    ].join('\n\n');
+
+    const verdict = quality.assess({
+      markdown,
+      query: 'forex signals telegram',
+      url: 'https://signals.example.com/join'
+    });
+
+    expect(verdict.verdict).toBe('reject');
+    expect(verdict.category).toBe('junk');
+    expect(verdict.stats.channelPitchHits).toBeGreaterThanOrEqual(2);
+  });
+
   it('does not treat a merely short page as junk', () => {
     // 60 words of a genuine release note: thin, on topic, nothing for sale.
     const markdown =

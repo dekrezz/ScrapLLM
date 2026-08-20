@@ -751,6 +751,83 @@ describe('ScrapLLMResearch run engine', () => {
     expect(snapshot.total).toBe(1);
   });
 
+  it('brings a finished run back as a result, not as a failure', async () => {
+    const store = sessionStore();
+    store.data['scrapllm.researchRun'] = {
+      runId: 'research-finished',
+      phase: 'done',
+      query: 'spring animations',
+      openTabIds: [],
+      entries: [
+        { url: 'https://example1.com/a', host: 'example1.com', title: 'A', status: 'ok', note: '~30 tokens', tokenCount: 30, notes: [], path: 'quiet' },
+        { url: 'https://example2.com/b', host: 'example2.com', title: 'B', status: 'skipped', note: 'A hard paywall', tokenCount: 0, notes: [], path: 'quiet', category: 'wall' }
+      ],
+      document: {
+        runId: 'research-finished',
+        filename: 'research-spring-animations.md',
+        markdown: '# Research\n',
+        tokenCount: 30,
+        expiresAt: Date.now() + 600000
+      },
+      expiresAt: Date.now() + 600000,
+      resultsTooLargeToPersist: false
+    };
+
+    const { api } = makeApi({ storage: { session: store } });
+    const { engine } = loadEngine({
+      searchResult: { results: [], engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null },
+      convert: async () => okConversion('unused', 0)
+    });
+
+    engine.init(api);
+    await engine.recoverOrphans();
+
+    // The worker died after the run had already finished: the document is still
+    // in storage and the popup has to be able to reach it, so the phase it was
+    // stored with stands.
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.phase).toBe('done');
+    expect(snapshot.filename).toBe('research-spring-animations.md');
+    expect(snapshot.succeeded).toBe(1);
+    expect(snapshot.skipped).toBe(1);
+    expect(snapshot.tokenCount).toBe(30);
+
+    const doc = await engine.getDocument('research-finished');
+    expect(doc.filename).toBe('research-spring-animations.md');
+  });
+
+  it('leaves a run that started during recovery alone', async () => {
+    const store = sessionStore();
+    store.data['scrapllm.researchRun'] = {
+      runId: 'research-old',
+      phase: 'running',
+      query: 'old question',
+      openTabIds: [],
+      entries: [],
+      expiresAt: Date.now() + 600000,
+      resultsTooLargeToPersist: false
+    };
+
+    const { api } = makeApi({ storage: { session: store } });
+    const { engine } = loadEngine({
+      searchResult: { results: [], engine: 'duckduckgo-html', usedRecency: false, rejected: [], degraded: null },
+      convert: async () => okConversion('unused', 0)
+    });
+
+    engine.init(api);
+    // Recovery is not awaited: `start` has to wait it out by itself, because a
+    // run created in the middle of it used to have its own record cleared.
+    engine.recoverOrphans();
+    const runId = await engine.start({ query: 'new question', sourceCount: 5, settings: {} });
+    await waitForRun(engine);
+
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.runId).toBe(runId);
+    expect(snapshot.phase).not.toBe('interrupted');
+    expect(snapshot.query).toBe('new question');
+    expect(store.data['scrapllm.researchRun'].runId).toBe(runId);
+  });
+
   it('reports run results as gone once nothing is stored for the run', async () => {
     const { api } = makeApi();
     const { engine } = loadEngine({
@@ -1482,6 +1559,35 @@ describe('ScrapLLMResearch quiet path', () => {
     expect(doc.markdown).toContain('Note: Page is rendered by JavaScript, so a tab was opened');
   });
 
+  it('gives the first 403 a tab and only calls the repeat a wall', async () => {
+    const { api, state } = makeApi();
+    const blocked = 'https://example1.com/guides/topic-1';
+    const { engine } = loadEngine({
+      results: [source(1)],
+      fetchImpl: async (requested) => ({
+        status: 403,
+        url: requested,
+        headers: { get: () => 'text/html; charset=utf-8' },
+        text: async () => '<html><body>Forbidden</body></html>'
+      }),
+      convertHtml: () => { throw new Error('a 403 body must never reach the parser'); }
+    });
+
+    engine.init(api);
+    await engine.start({ query: 'blocked', sourceCount: 5, settings: {}, hostAccess: true });
+    await waitForRun(engine);
+
+    const entry = engine.getSnapshot().entries[0];
+    // The user's own tab carries the session this fetch deliberately does not,
+    // so the first block escalates rather than ending the source.
+    expect(state.created).toHaveLength(1);
+    expect(state.created[0].url).toBe(blocked);
+    expect(entry.path).toBe('rendered');
+    expect(entry.pathReason).toBe('Server answered 403, so a tab was opened');
+    // Not a wall: nothing has come back twice yet.
+    expect(entry.category).not.toBe('wall');
+  });
+
   it('says how thin a quiet capture was instead of passing it off as complete', async () => {
     const { api } = makeApi();
     const { engine } = loadEngine({
@@ -1781,16 +1887,18 @@ describe('ScrapLLMQuietCapture wall classification', () => {
       finalUrl: 'https://example.com/a', html: '<html><body>Forbidden</body></html>'
     };
 
+    // `seenStatuses` is what came *before* this response: on the first attempt
+    // there is nothing in it, which is what makes the first 403 an escalation.
     const first = quiet.classifyResponse(response, 'https://example.com/a', {
-      seenStatuses: [403], attempt: 1
+      seenStatuses: [], attempt: 1
     });
     expect(first.decision).toBe('render');
     expect(first.category).toBe('transient');
 
-    // The status is recorded before the classification, so a repeat carries it
-    // twice: once from this response and once from the attempt before.
+    // The status is recorded after the classification, so the retry sees the
+    // one status the first attempt was answered with.
     const again = quiet.classifyResponse(response, 'https://example.com/a', {
-      seenStatuses: [403, 403], attempt: 2
+      seenStatuses: [403], attempt: 2
     });
     expect(again.decision).toBe('reject');
     expect(again.category).toBe('wall');

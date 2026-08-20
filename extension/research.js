@@ -90,6 +90,10 @@ const ScrapLLMResearch = (function() {
   let state = null;
   let lastDocument = null;   // { runId, filename, markdown, tokenCount, expiresAt }
   let lastSnapshot = idleSnapshot();
+  // Orphan recovery is asynchronous and runs at module evaluation. `start()`
+  // waits on it, so a run created while it was mid-await can no longer have its
+  // own record read, cleared and reported as interrupted.
+  let recoveryPromise = null;
 
   let throttleTimer = null;
   let throttlePending = false;
@@ -361,7 +365,12 @@ const ScrapLLMResearch = (function() {
         notes: e.notes || [],
         path: e.path || null,
         pathReason: e.pathReason || null,
-        thinNote: e.thinNote || null
+        thinNote: e.thinNote || null,
+        // Carried too, so a recovered run's rows read the way they read before
+        // the worker died: a wall is still a skip, not an error.
+        category: e.category || null,
+        attempts: e.attempts || 0,
+        replacement: Boolean(e.replacement)
       })),
       expiresAt: run.expiresAt,
       resultsTooLargeToPersist: run.resultsTooLargeToPersist
@@ -438,9 +447,71 @@ const ScrapLLMResearch = (function() {
     }
   }
 
+  // One parse at a time. The offscreen document is a single JS thread and its
+  // convertHtml is synchronous, so three workers sending at once do not parse
+  // in parallel — they queue inside it, and the last one's 5 s budget is spent
+  // waiting for the first two. Serialising the dispatch here means the budget
+  // measures the parse rather than the queue.
+  let parseChain = Promise.resolve();
+
   // Resolves with { success, result } or { success: false, error }. Never
   // rejects: a parse failure is an escalation signal, not a run failure.
   async function convertFetchedHtml(payload) {
+    if (canParseLocally()) {
+      try {
+        return { success: true, result: ScrapLLMConvert.convertHtml(payload) };
+      } catch (error) {
+        return { success: false, error: (error && error.message) || String(error) };
+      }
+    }
+
+    if (!hasOffscreenApi()) {
+      return {
+        success: false,
+        error: 'this browser exposes neither DOMParser nor an offscreen document'
+      };
+    }
+
+    // Opening the parser is not parsing: the first capture of a run also loads
+    // readability.js, turndown.js and convert-core.js into a document that does
+    // not exist yet, and charging that to the page's parse budget failed a page
+    // that had parsed perfectly. It has the run's own budget instead.
+    try {
+      await ensureOffscreen();
+    } catch (error) {
+      return { success: false, error: (error && error.message) || String(error) };
+    }
+
+    return dispatchParse(payload);
+  }
+
+  // Never rejects, for the same reason convertFetchedHtml does not.
+  async function sendToParser(payload) {
+    try {
+      const response = await api.runtime.sendMessage({
+        target: OFFSCREEN_TARGET,
+        action: 'convertHtml',
+        html: payload.html,
+        url: payload.url,
+        title: payload.title,
+        settings: payload.settings
+      });
+      if (!response) return { success: false, error: 'the parser did not answer' };
+      if (!response.success) return { success: false, error: response.error || 'the parser failed' };
+      return { success: true, result: response.result };
+    } catch (error) {
+      return { success: false, error: (error && error.message) || String(error) };
+    }
+  }
+
+  function dispatchParse(payload) {
+    const send = parseChain.then(() => sendToParser(payload));
+    // The next parse waits for the send itself, never for the timeout: a parse
+    // this side has given up on still holds the offscreen thread, and starting
+    // the next one's clock while that is true would fail it for a reason that
+    // is not about it.
+    parseChain = send.then(() => {}, () => {});
+
     let timeoutId = null;
     const timeout = new Promise(resolve => {
       timeoutId = setTimeout(
@@ -449,37 +520,10 @@ const ScrapLLMResearch = (function() {
       );
     });
 
-    const work = (async () => {
-      try {
-        if (canParseLocally()) {
-          return { success: true, result: ScrapLLMConvert.convertHtml(payload) };
-        }
-        if (!hasOffscreenApi()) {
-          return {
-            success: false,
-            error: 'this browser exposes neither DOMParser nor an offscreen document'
-          };
-        }
-        await ensureOffscreen();
-        const response = await api.runtime.sendMessage({
-          target: OFFSCREEN_TARGET,
-          action: 'convertHtml',
-          html: payload.html,
-          url: payload.url,
-          title: payload.title,
-          settings: payload.settings
-        });
-        if (!response) return { success: false, error: 'the parser did not answer' };
-        if (!response.success) return { success: false, error: response.error || 'the parser failed' };
-        return { success: true, result: response.result };
-      } catch (error) {
-        return { success: false, error: (error && error.message) || String(error) };
-      }
-    })();
-
-    const outcome = await Promise.race([work, timeout]);
-    if (timeoutId !== null) clearTimeout(timeoutId);
-    return outcome;
+    return Promise.race([send, timeout]).then(outcome => {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      return outcome;
+    });
   }
 
   // A token count from the one shared estimator in convert-core, wherever that
@@ -548,7 +592,8 @@ const ScrapLLMResearch = (function() {
   // an earlier run must watch *that* run's cancelled flag, not the flag of
   // whichever run happens to be current.
   async function waitForScriptable(run, tabId, url, deadlineAt) {
-    const limit = Math.min(Date.now() + PAGE_LOAD_TIMEOUT_MS, deadlineAt);
+    const pageLimit = Date.now() + PAGE_LOAD_TIMEOUT_MS;
+    const limit = Math.min(pageLimit, deadlineAt);
 
     while (Date.now() < limit) {
       if (run && run.cancelled) throw new Error(CANCELLED_MESSAGE);
@@ -569,6 +614,11 @@ const ScrapLLMResearch = (function() {
 
       await sleep(PING_INTERVAL_MS);
     }
+
+    // Which limit ran out decides what happened. When the run's own budget is
+    // what stopped the wait, the page was never given its 20 s, and calling it
+    // a page that would not load is a sentence the run cannot stand behind.
+    if (deadlineAt < pageLimit) throw new Error(BUDGET_MESSAGE);
 
     let message = 'Page did not become scriptable within 20 s';
     try {
@@ -635,13 +685,18 @@ const ScrapLLMResearch = (function() {
     if (run.cancelled) {
       return { outcome: 'rejected', message: CANCELLED_MESSAGE, category: 'cancelled' };
     }
-    // What this source has already been answered with, so a status that keeps
-    // coming back can be told apart from one that happened once.
+    // Classified against what came *before* this response: the ladder's whole
+    // point is that the first 401/403/429 escalates to a tab (the user's own
+    // session may walk straight through it) and only a repeat is a wall. If the
+    // current status were recorded first, every first block would look like a
+    // repeat of itself.
+    const verdict = ScrapLLMQuietCapture.classifyResponse(response, source.url, attempts);
+
+    // Now it is history: the next attempt on this source sees it.
     if (response && Number.isFinite(response.status)) {
       attempts.seenStatuses.push(response.status);
     }
 
-    const verdict = ScrapLLMQuietCapture.classifyResponse(response, source.url, attempts);
     if (verdict.decision === 'render') {
       return { outcome: 'render', reason: verdict.reason, category: verdict.category };
     }
@@ -752,6 +807,11 @@ const ScrapLLMResearch = (function() {
   async function captureInTab(source, entry, run, escalationReason) {
     let tab = null;
     try {
+      // Checked again here, not only at the top of fetchOne: a source can wait
+      // in the pool for minutes, and a tab opened past the deadline is a window
+      // the user watches appear for a capture the run has no time to finish.
+      if (Date.now() > run.deadline) throw new Error(BUDGET_MESSAGE);
+
       tab = await createTab(source.url, run.windowId);
 
       run.openTabIds.add(tab.id);
@@ -821,17 +881,20 @@ const ScrapLLMResearch = (function() {
     } catch (error) {
       const message = (error && error.message) || String(error);
       const cancelled = run.cancelled || message === CANCELLED_MESSAGE;
+      // The run running out of time is not a failure of this page, and there is
+      // nothing inside it to retry either.
+      const outOfBudget = !cancelled && message === BUDGET_MESSAGE;
       // Both halves of the story: why the quiet path gave up, and why the tab
       // it escalated to failed as well.
       const reason = cancelled
         ? CANCELLED_MESSAGE
-        : (escalationReason ? `${escalationReason}, and then: ${message}` : message);
+        : (escalationReason && !outOfBudget ? `${escalationReason}, and then: ${message}` : message);
 
       // A tab that timed out, was closed under us or never answered is the
       // transient half of the ladder: this is exactly the failure a second
       // pass a few seconds later can come back from.
-      entry.category = cancelled ? 'cancelled' : 'transient';
-      markEntry(entry, cancelled ? 'skipped' : 'error', reason);
+      entry.category = cancelled ? 'cancelled' : (outOfBudget ? 'budget' : 'transient');
+      markEntry(entry, (cancelled || outOfBudget) ? 'skipped' : 'error', reason);
       broadcast(false);
 
       return {
@@ -1064,6 +1127,11 @@ const ScrapLLMResearch = (function() {
 
     const history = { seenStatuses: [], attempt: 1 };
     let result = null;
+    // The delay the run actually waited, so the sentence the user reads names
+    // it rather than the constant it was built from — the wait is jittered, and
+    // "3 s" was a number no run ever used.
+    let waited = 0;
+    let retryWithheld = false;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SOURCE; attempt++) {
       history.attempt = attempt;
@@ -1094,7 +1162,7 @@ const ScrapLLMResearch = (function() {
       result = result
         ? Object.assign({}, outcome, {
           error: `${result.error}; the retry ${
-            Math.round(RETRY_BASE_DELAY_MS / 1000)} s later failed too: ${outcome.error}`
+            Math.round(waited / 1000)} s later failed too: ${outcome.error}`
         })
         : outcome;
 
@@ -1104,11 +1172,17 @@ const ScrapLLMResearch = (function() {
 
       const delay = retryDelay();
       // A retry has to fit: the delay plus a whole capture, inside what is left
-      // of the run. Otherwise the source ends now, with the reason it failed.
-      if (Date.now() + delay > run.deadline - RETRY_MIN_REMAINING_MS) break;
+      // of the run. Otherwise the source ends now, with the reason it failed —
+      // and with the fact that the second attempt this failure had earned was
+      // never made, because otherwise it reads exactly like one that was.
+      if (Date.now() + delay > run.deadline - RETRY_MIN_REMAINING_MS) {
+        retryWithheld = true;
+        break;
+      }
 
       markEntry(entry, 'fetching', `Retrying in ${Math.round(delay / 1000)} s`);
       broadcast(false);
+      waited = delay;
       await sleep(delay);
       if (run.cancelled || Date.now() > run.deadline) break;
     }
@@ -1116,6 +1190,12 @@ const ScrapLLMResearch = (function() {
     // Whatever it was, the reason stands and the run pulls the next candidate
     // so the user still gets the number of sources they asked for.
     if (result) {
+      if (retryWithheld) {
+        result = Object.assign({}, result, {
+          error: `${result.error}; no retry was attempted: the run had under ${
+            Math.round(RETRY_MIN_REMAINING_MS / 1000)} s left`
+        });
+      }
       const finalStatus = (entry.status === 'error' || entry.status === 'skipped')
         ? entry.status
         : 'error';
@@ -1311,6 +1391,18 @@ const ScrapLLMResearch = (function() {
 
     const query = String((request && request.query) || '').trim();
     if (!query) throw new Error('Enter a question to research.');
+
+    // Orphan recovery closes tabs and rewrites the stored record. It is started
+    // at module evaluation and is full of awaits, so a run created while it was
+    // in flight used to have its own record cleared underneath it. Wait it out
+    // first; it is bookkeeping, so a failure in it does not fail the run.
+    if (recoveryPromise) {
+      try {
+        await recoveryPromise;
+      } catch (error) {
+        console.error('Research orphan recovery failed:', error);
+      }
+    }
 
     const sourceCount = clampSourceCount(request && request.sourceCount);
     const settings = Object.assign({}, (request && request.settings) || {});
@@ -1579,9 +1671,61 @@ const ScrapLLMResearch = (function() {
 
   // A service-worker restart (or a browser crash) leaves research tabs open
   // with nobody to close them. Runs at module evaluation.
-  async function recoverOrphans() {
+  function recoverOrphans() {
+    if (!recoveryPromise) recoveryPromise = runRecovery();
+    return recoveryPromise;
+  }
+
+  // True while a run owns the engine: recovery must not touch anything then,
+  // and it has to ask again after every await, because a `start` can land in
+  // between two of them.
+  function runIsLive() {
+    return Boolean(state && (state.phase === 'searching' || state.phase === 'running'));
+  }
+
+  // What a stored record becomes when the worker comes back to it. Only a run
+  // that was still going when the worker died was interrupted; a run that had
+  // finished is still finished, and saying otherwise threw away a document the
+  // popup could still hand over.
+  function recoveredPhase(phase) {
+    if (phase === 'done' || phase === 'cancelled' || phase === 'error' || phase === 'empty') {
+      return phase;
+    }
+    return 'interrupted';
+  }
+
+  // The counters buildSnapshot would have produced, from the entries the record
+  // kept — a restored `done` run has to show the same "6 of 8 sources" it did
+  // before the restart, not a result card full of zeroes.
+  function snapshotFromPersisted(persisted, phase) {
+    const entries = persisted.entries || [];
+    const succeeded = entries.filter(e => e.status === 'ok').length;
+    const failed = entries.filter(e => e.status === 'error').length;
+    const skipped = entries.filter(e => e.status === 'skipped').length;
+
+    return Object.assign(idleSnapshot(), {
+      runId: persisted.runId || null,
+      phase,
+      query: persisted.query || '',
+      total: entries.length,
+      completed: succeeded + failed + skipped,
+      succeeded,
+      failed,
+      skipped,
+      tokenCount: entries.reduce((sum, e) => sum + (e.tokenCount || 0), 0),
+      quiet: entries.filter(e => e.status === 'ok' && e.path === 'quiet').length,
+      rendered: entries.filter(e => e.status === 'ok' && e.path === 'rendered').length,
+      dropped: entries.filter(e => e.category === 'junk' || e.category === 'duplicate').length,
+      replacements: entries.filter(e => e.replacement).length,
+      entries,
+      resultsTooLargeToPersist: Boolean(persisted.resultsTooLargeToPersist),
+      filename: persisted.document ? persisted.document.filename : null
+    });
+  }
+
+  async function runRecovery() {
     if (!api) return;
-    if (state && (state.phase === 'searching' || state.phase === 'running')) return;
+    if (runIsLive()) return;
 
     // First, and before the state is even read: a crashed worker can leave the
     // offscreen parser open, an extension may only ever have one, and the run
@@ -1590,30 +1734,30 @@ const ScrapLLMResearch = (function() {
     // with the worker. Closing a document that does not exist is already a
     // no-op inside closeOffscreen.
     await closeOffscreen();
+    if (runIsLive()) return;
 
     const persisted = await readPersisted();
     if (!persisted) return;
+    // A run that started while the awaits above were in flight owns this
+    // record. Closing its tabs, clearing it or calling it interrupted would
+    // destroy a run that is working perfectly.
+    if (runIsLive() || (state && state.runId === persisted.runId)) return;
 
     const tabIds = persisted.openTabIds || [];
     for (const tabId of tabIds) {
       await removeTab(tabId);
+      if (state && state.runId === persisted.runId) return;
     }
+    if (runIsLive()) return;
 
-    lastSnapshot = Object.assign(idleSnapshot(), {
-      runId: persisted.runId || null,
-      phase: 'interrupted',
-      query: persisted.query || '',
-      entries: persisted.entries || [],
-      total: (persisted.entries || []).length,
-      resultsTooLargeToPersist: Boolean(persisted.resultsTooLargeToPersist),
-      filename: persisted.document ? persisted.document.filename : null
-    });
+    const phase = recoveredPhase(persisted.phase);
+    lastSnapshot = snapshotFromPersisted(persisted, phase);
 
     if (persisted.document) {
       lastDocument = persisted.document;
       try {
         await writePersisted(Object.assign({}, persisted, {
-          phase: 'interrupted',
+          phase,
           openTabIds: []
         }));
       } catch (error) {
@@ -1625,6 +1769,7 @@ const ScrapLLMResearch = (function() {
       await clearPersisted();
     }
 
+    if (runIsLive()) return;
     emit(lastSnapshot);
   }
 
