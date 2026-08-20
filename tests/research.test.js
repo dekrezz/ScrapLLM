@@ -610,9 +610,15 @@ describe('ScrapLLMResearch run engine', () => {
       convert: async (tabId) => okConversion(`# Body ${tabId}`, 100)
     });
 
+    // The retry delay is jittered on purpose, so the sentence the row carries
+    // names a different number of seconds on every run. Pin the jitter to zero
+    // and the message is the base delay exactly.
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+
     engine.init(api);
     await engine.start({ query: 'spring animations', sourceCount: 5, settings: {} });
     await waitForRun(engine);
+    random.mockRestore();
 
     const snapshot = engine.getSnapshot();
     expect(snapshot.phase).toBe('done');
@@ -1182,6 +1188,7 @@ describe('ScrapLLMQuietCapture.fetchSource', () => {
     expect(binary).toMatchObject({ kind: 'nonHtml', contentType: '' });
     expect(quiet.classifyResponse(binary, 'https://example.com/blob')).toEqual({
       decision: 'reject',
+      category: 'unusable',
       reason: 'Server did not say what it sent, and it does not open like a web page'
     });
 
@@ -1223,7 +1230,11 @@ describe('ScrapLLMQuietCapture.classify', () => {
       { kind: 'nonHtml', status: 200, contentType: 'image/png', finalUrl: 'https://a.com/x.png' },
       'https://a.com/x.png'
     );
-    expect(verdict).toEqual({ decision: 'reject', reason: 'Not a web page: image/png' });
+    expect(verdict).toEqual({
+      decision: 'reject',
+      category: 'unusable',
+      reason: 'Not a web page: image/png'
+    });
   });
 
   it('escalates a bot check to a tab, with the status in the reason', () => {
@@ -1232,7 +1243,11 @@ describe('ScrapLLMQuietCapture.classify', () => {
       { kind: 'httpError', status: 403, contentType: 'text/html', finalUrl: 'https://a.com/x', html: '' },
       'https://a.com/x'
     );
-    expect(verdict).toEqual({ decision: 'render', reason: 'Server answered 403, so a tab was opened' });
+    expect(verdict).toEqual({
+      decision: 'render',
+      category: 'transient',
+      reason: 'Server answered 403, so a tab was opened'
+    });
   });
 
   it('fails a 404 or 410 outright, because no tab can render a page that is gone', () => {
@@ -1245,6 +1260,7 @@ describe('ScrapLLMQuietCapture.classify', () => {
         'https://a.com/x'
       )).toEqual({
         decision: 'reject',
+        category: 'unusable',
         reason: `Server answered ${status}: the page is not there, and a tab cannot bring it back`
       });
       expect(quiet.classifyResponse(
