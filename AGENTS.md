@@ -75,6 +75,20 @@ action's menu, because chat detection can be wrong and the page is sometimes wha
 the user wants — and when it runs there, the output carries a note saying only the
 rendered messages were captured.
 
+**`chat.js`** — the Claude request matters as much as the parsing: with
+`rendering_mode=raw` the API returns no `content` array at all, and the flat
+`text` it falls back to has already had thinking folded into the answer and every
+tool block replaced by "This block is not supported on your current device yet".
+The export therefore asks for
+`?tree=True&rendering_mode=messages&render_all_tools=true` and renders the blocks
+in their own order — one message can hold several text blocks, thinking before
+*and* after the answer, and several tool round-trips. Reasoning goes into a
+`<details>` disclosure the way the site hides it, a tool call becomes its
+on-screen label plus its `display_content` code block, search results become a
+list of sources, and a shell result shows its `stdout` rather than the JSON
+envelope around it. `tree=True` is not optional: without it that test
+conversation lost 31 of 429 messages.
+
 **`chat.js`** — a conversation is a tree, not a list: editing a message
 mid-thread grows a sibling branch and the old one stays in the database. Both
 API paths (`claude.ai` via `chat_conversations?tree=True`, `chatgpt.com` via

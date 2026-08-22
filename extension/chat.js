@@ -180,8 +180,16 @@ const ScrapLLMChat = (function () {
     const orgs = await fetchJson('/api/organizations');
     if (!Array.isArray(orgs) || !orgs.length) throw new Error('No Claude organization on this session');
     const orgId = orgs[0].uuid;
+    // rendering_mode=messages is what carries the `content` array; with `raw`
+    // the field is absent entirely and everything collapses into a flat
+    // `text`, where the server has already flattened thinking into the answer
+    // and replaced every tool block with "This block is not supported on your
+    // current device yet". render_all_tools=true is what turns those
+    // placeholders back into real tool_use/tool_result blocks. tree=True stays:
+    // without it this conversation loses 31 of its 429 messages.
     const data = await fetchJson(
-      `/api/organizations/${orgId}/chat_conversations/${conversationId}?tree=True&rendering_mode=raw`
+      `/api/organizations/${orgId}/chat_conversations/${conversationId}` +
+      '?tree=True&rendering_mode=messages&render_all_tools=true'
     );
 
     const all = data.chat_messages || [];
@@ -207,17 +215,162 @@ const ScrapLLMChat = (function () {
     };
   }
 
+  // One message can hold several text blocks, thinking before *and* after the
+  // answer, and any number of tool round-trips — so the blocks are rendered in
+  // their own order rather than grouped by kind, which is also the order the
+  // site shows them in.
   function claudeMessageText(message) {
-    if (Array.isArray(message.content) && message.content.length) {
-      return message.content.map(block => {
-        if (block.type === 'text') return block.text || '';
-        if (block.type === 'thinking') return `> [thinking]\n> ${String(block.thinking || '').replace(/\n/g, '\n> ')}`;
-        if (block.type === 'tool_use') return `\`\`\`json\n${JSON.stringify(block.input, null, 2)}\n\`\`\``;
-        if (block.type === 'tool_result') return `\`\`\`\n${typeof block.content === 'string' ? block.content : JSON.stringify(block.content, null, 2)}\n\`\`\``;
-        return '';
-      }).filter(Boolean).join('\n\n').trim();
+    const blocks = Array.isArray(message.content) ? message.content : [];
+    if (blocks.length) {
+      const parts = blocks.map(claudeBlockMarkdown).filter(Boolean);
+      const files = claudeFileList(message);
+      if (files) parts.push(files);
+      return parts.join('\n\n').trim();
     }
-    return String(message.text || '').trim();
+    // Only reached on payload shapes that carry no content array at all.
+    const flat = String(message.text || '').trim();
+    const files = claudeFileList(message);
+    return files ? `${flat}\n\n${files}`.trim() : flat;
+  }
+
+  function claudeBlockMarkdown(block) {
+    if (!block || !block.type) return '';
+    if (block.type === 'text') return String(block.text || '').trim();
+    if (block.type === 'thinking') return claudeThinking(block);
+    if (block.type === 'tool_use') return claudeToolUse(block);
+    if (block.type === 'tool_result') return claudeToolResult(block);
+    return '';
+  }
+
+  // The site keeps reasoning behind a disclosure, so the export does too: it is
+  // context, not the answer, and inlining it is what made the two run together.
+  function claudeThinking(block) {
+    if (block.hidden || block.thinking_hidden) return '';
+    const text = String(block.thinking || '').trim();
+    if (!text) return '';
+    const steps = Array.isArray(block.summaries)
+      ? block.summaries.map(s => (s && s.summary) || '').filter(Boolean)
+      : [];
+    const label = steps.length ? steps[0] : 'Thinking';
+    // Any further steps belong in the body as their own lines rather than in
+    // the title: joined into one summary they ran to nearly 200 characters.
+    const rest = steps.length > 1
+      ? steps.slice(1).map(step => `- ${step}`).join('\n') + '\n\n'
+      : '';
+    const truncated = block.cut_off || block.truncated ? '\n\n_(cut off)_' : '';
+    return `<details>\n<summary>${label}</summary>\n\n${rest}${text}${truncated}\n\n</details>`;
+  }
+
+  // A tool call is a labelled step on the page, not a JSON payload. The label
+  // the site prints is in `message`, and `display_content` is the code block it
+  // renders — both are used before falling back to guessing at `input`.
+  function claudeToolUse(block) {
+    const label = String(block.message || block.name || 'Tool').trim();
+    const display = block.display_content;
+    if (display && display.type === 'code_block' && display.code) {
+      return `**${label}**\n\n${fence(String(display.code), display.language || '')}`;
+    }
+    const input = block.input || {};
+    if (typeof input.query === 'string' && input.query) {
+      return `**${label}**: ${inlineCode(input.query)}`;
+    }
+    // Artifacts are expected to arrive here as input.content with a title and a
+    // language. No conversation checked so far contains one, so this branch is
+    // written from the documented shape and has never run against real data.
+    const command = typeof input.command === 'string' ? input.command : '';
+    const content = typeof input.content === 'string' ? input.content : '';
+    const body = content || command;
+    if (body) {
+      const language = typeof input.language === 'string' ? input.language : '';
+      const title = typeof input.title === 'string' && input.title ? ` — ${input.title}` : '';
+      return `**${label}${title}**\n\n${fence(body, language)}`;
+    }
+    // Nothing recognisable: keep the shape rather than pretend it was empty.
+    return `**${label}**\n\n${fence(JSON.stringify(input, null, 2), 'json')}`;
+  }
+
+  function claudeToolResult(block) {
+    const items = Array.isArray(block.content) ? block.content : [];
+    const failed = block.is_error ? ' (failed)' : '';
+
+    // Search results are a list of sources, which is how the page shows them.
+    const sources = items.filter(item => item && item.type === 'knowledge' && item.url);
+    if (sources.length) {
+      const lines = sources.map(item => {
+        const site = (item.metadata && item.metadata.site_name) || '';
+        const title = String(item.title || item.url).trim();
+        return `- [${title}](${item.url})${site ? ` — ${site}` : ''}`;
+      });
+      return `**Sources${failed}**\n\n${lines.join('\n')}`;
+    }
+
+    const texts = items.filter(item => item && item.type === 'text' && item.text)
+      .map(item => String(item.text));
+    if (!texts.length) return '';
+
+    // A shell result arrives as a JSON envelope; the useful part is the output,
+    // not the wrapper.
+    const rendered = texts.map(text => {
+      const shell = parseShellResult(text);
+      if (!shell) return fence(text, '');
+      const out = [];
+      if (shell.stdout) out.push(fence(shell.stdout.replace(/\n$/, ''), ''));
+      if (shell.stderr) out.push(`_stderr_\n\n${fence(shell.stderr.replace(/\n$/, ''), '')}`);
+      if (!out.length) out.push(`_exit code ${shell.returncode}, no output_`);
+      return out.join('\n\n');
+    });
+    return `**Result${failed}**\n\n${rendered.join('\n\n')}`;
+  }
+
+  function parseShellResult(text) {
+    if (!/^\s*\{/.test(text)) return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && (typeof parsed.stdout === 'string' || typeof parsed.stderr === 'string')) {
+        return { stdout: parsed.stdout || '', stderr: parsed.stderr || '', returncode: parsed.returncode };
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+
+  // Images and files attached to a turn were dropped entirely before this.
+  function claudeFileList(message) {
+    const files = Array.isArray(message.files) ? message.files : [];
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const lines = [];
+    files.forEach(file => {
+      const name = String((file && (file.file_name || file.file_uuid)) || 'file').trim();
+      const url = file && (file.preview_url || file.thumbnail_url);
+      const kind = file && file.file_kind === 'image' ? 'image' : 'attached';
+      // Deliberately a link, not an embedded image: these URLs are private
+      // endpoints that need the session cookie, so an inline image would be a
+      // broken picture in every reader — including this user's other browser.
+      lines.push(url ? `- ${kind}: [${name}](${url})` : `- ${kind}: ${name}`);
+    });
+    attachments.forEach(attachment => {
+      const name = String((attachment && (attachment.file_name || attachment.name)) || 'attachment').trim();
+      lines.push(`- attached: ${name}`);
+    });
+    return lines.length ? lines.join('\n') : '';
+  }
+
+  // Inline code needs the same treatment as a fence: a query with a backtick in
+  // it would otherwise close the span early and spill into the sentence.
+  function inlineCode(text) {
+    const body = String(text);
+    const runs = body.match(/`+/g) || [];
+    const marker = '`'.repeat(runs.reduce((max, run) => Math.max(max, run.length), 0) + 1);
+    const pad = /^`|`$/.test(body) ? ' ' : '';
+    return `${marker}${pad}${body}${pad}${marker}`;
+  }
+
+  // A fence long enough to survive whatever backticks are inside it.
+  function fence(body, language) {
+    const runs = String(body).match(/`{3,}/g) || [];
+    const marker = '`'.repeat(runs.reduce((max, run) => Math.max(max, run.length), 2) + 1);
+    return `${marker}${language || ''}\n${String(body)}\n${marker}`;
   }
 
   async function fetchChatGptConversation(location) {
