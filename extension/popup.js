@@ -166,7 +166,6 @@ const xMaxPostsSelect = document.getElementById("xMaxPosts");
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
 const tokenCountValue = document.getElementById("tokenCountValue");
-const tokenWarning = document.getElementById("tokenWarning");
 const showTokenCountCheckbox = document.getElementById("showTokenCount");
 
 
@@ -176,7 +175,11 @@ let currentTokenCount = 0;
 // Default token counter settings
 const DEFAULT_TOKEN_SETTINGS = {
   showTokenCount: true,
-  tokenContextLimit: 8192
+  // The threshold that decides clipboard versus file. 8k was a 2023 number and
+  // would send almost every real page to a download; 128k is what the models
+  // people paste into actually take, so the file route is reserved for the
+  // documents that genuinely will not fit.
+  tokenContextLimit: 128000
 };
 
 // ---------------------------------------------------------------------------
@@ -326,11 +329,10 @@ function initTheme() {
 function updateTokenDisplay(count, limit) {
   currentTokenCount = count;
 
-  // The count is the whole display: a number and its unit. The budget is only
-  // surfaced when it is actually at risk (see updateTokenWarning).
+  // The count is the whole display: a number and its unit. Nothing warns about
+  // the budget, because nothing needs to — going over it changes where the
+  // result is delivered, not whether the user gets one.
   tokenCountValue.textContent = count.toLocaleString();
-
-  const percentage = Math.min((count / limit) * 100, 100);
 
   // Show/hide the counter
   if (showTokenCountCheckbox.checked) {
@@ -339,18 +341,6 @@ function updateTokenDisplay(count, limit) {
     tokenCounter.classList.add('hidden');
   }
 
-  // Update warning message
-  tokenWarning.classList.remove('hidden', 'error');
-  if (percentage >= 100) {
-    tokenWarning.textContent = `⚠️ Exceeds limit by ${(count - limit).toLocaleString()} tokens`;
-    tokenWarning.classList.add('error');
-  } else if (percentage >= 90) {
-    tokenWarning.textContent = `⚠️ ${(limit - count).toLocaleString()} tokens remaining`;
-  } else if (percentage >= 75) {
-    tokenWarning.textContent = `${(limit - count).toLocaleString()} tokens remaining`;
-  } else {
-    tokenWarning.classList.add('hidden');
-  }
 }
 
 /**
@@ -885,15 +875,23 @@ async function convertToMarkdown(scopeOverride) {
       }
     }
 
-    // Copy to clipboard
-    await navigator.clipboard.writeText(response.markdown);
-
-    // Update UI
-    statusIndicator.textContent = "Copied to clipboard!";
-    statusIndicator.className = "status success";
+    // Past the context limit the clipboard is the wrong destination: pasting
+    // a document that cannot fit is a dead end, and a warning telling the user
+    // so leaves them holding it. Hand over a file instead — the result is
+    // delivered either way, and the route is the only thing that changes.
+    const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
+    if (tokenCount > contextLimit) {
+      const filename = await generateFileNameFromPageTitle();
+      downloadMarkdownFile(filename, response.markdown);
+      statusIndicator.textContent = "Too large to paste — downloaded instead";
+      statusIndicator.className = "status success";
+    } else {
+      await navigator.clipboard.writeText(response.markdown);
+      statusIndicator.textContent = "Copied to clipboard!";
+      statusIndicator.className = "status success";
+    }
 
     // Update token display
-    const contextLimit = DEFAULT_TOKEN_SETTINGS.tokenContextLimit;
     updateTokenDisplay(tokenCount, contextLimit);
 
     // Save settings
