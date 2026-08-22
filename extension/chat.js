@@ -716,13 +716,12 @@ const ScrapLLMChat = (function () {
       `**Exported:** ${formatTime(new Date().toISOString())}`
     ].join('\n');
 
-    // Each turn is its own block with an index, a role and a time, so a model
-    // reading the transcript can tell them apart and quote them.
-    const body = messages.map((message, index) => {
-      const number = String(index + 1).padStart(2, '0');
+    // Each turn is its own block with a role and a time, so a model reading the
+    // transcript can tell them apart and quote them.
+    const body = messages.map(message => {
       const role = message.role === 'user' ? 'User' : 'Assistant';
       const time = formatTime(message.time);
-      return `### [${number}] ${role}${time ? ` · ${time}` : ''}\n\n${message.text}`;
+      return `### ${role}${time ? ` · ${time}` : ''}\n\n${message.text}`;
     }).join('\n\n---\n\n');
 
     return {
