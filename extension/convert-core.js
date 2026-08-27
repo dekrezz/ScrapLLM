@@ -96,7 +96,8 @@ const ScrapLLMConvert = (function() {
   // CONTENT EXTRACTION
   // ==========================================================================
 
-  function extractFullPageContent(doc) {
+  function extractFullPageContent(doc, url) {
+    removeRedditAds(doc.body || doc, url);
     const scripts = doc.getElementsByTagName('script');
     const styles = doc.getElementsByTagName('style');
     for (let i = scripts.length - 1; i >= 0; i--) {
@@ -116,6 +117,10 @@ const ScrapLLMConvert = (function() {
       // returns, so by the time cleanContent runs there is nothing left to
       // identify an icon font by, and the ligature survives into the Markdown.
       removeIconLigatures(documentClone.body);
+      // Same reason, plus a stronger one: a promoted post is structurally a
+      // post, so left in place it competes for Readability's score and can be
+      // picked as the article outright.
+      removeRedditAds(documentClone.body, ctx.url);
       const reader = new Readability(documentClone);
       const article = reader.parse();
 
@@ -537,6 +542,65 @@ const ScrapLLMConvert = (function() {
     }
   }
 
+  // Reddit ships its own promoted posts and comment-tree ads as first-class
+  // elements in the same DOM as real content, so nothing upstream has a reason
+  // to drop them: to Readability a promoted post is a post, and the full-page
+  // path takes the body verbatim. They are removed by name instead.
+  const REDDIT_AD_SELECTORS = [
+    'shreddit-ad-post',
+    'shreddit-comments-page-ad',
+    'shreddit-comment-tree-ad',
+    'shreddit-dynamic-ad-link',
+    'shreddit-sponsored-post',
+    '[promoted]',
+    '[is-sponsored]',
+    '[data-promoted="true"]',
+    '[data-testid="promotedlink"]',
+    '[data-adclicklocation]',
+    '.promotedlink',
+    '.thing.promoted',
+    '.ad-container',
+    '#ad_1'
+  ];
+
+  function isRedditHost(url) {
+    try {
+      return /(^|\.)reddit\.com$/i.test(new URL(url).hostname);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Confined to Reddit hosts: a legitimate `.promoted` or `[promoted]` on some
+  // other site is that site's content, and removing it would be the kind of
+  // silent loss this extension exists to avoid.
+  function removeRedditAds(content, url) {
+    if (!isRedditHost(url)) return;
+
+    for (const selector of REDDIT_AD_SELECTORS) {
+      let elements;
+      try {
+        elements = content.querySelectorAll(selector);
+      } catch (error) {
+        continue; // a selector this DOM implementation will not parse
+      }
+      for (let i = elements.length - 1; i >= 0; i--) {
+        if (elements[i].parentNode) elements[i].parentNode.removeChild(elements[i]);
+      }
+    }
+
+    // Reddit adds ad elements faster than any fixed list tracks, but they are
+    // consistently named: a shreddit-* custom element with "ad" as a word in
+    // its tag. Matched on the tag name because CSS has no wildcard for it.
+    const all = content.querySelectorAll('*');
+    for (let i = all.length - 1; i >= 0; i--) {
+      const tag = (all[i].tagName || '').toLowerCase();
+      if (/^shreddit-(.+-)?ads?(-.+)?$/.test(tag) && all[i].parentNode) {
+        all[i].parentNode.removeChild(all[i]);
+      }
+    }
+  }
+
   function cleanContent(ctx, content, settings) {
     // For fullPage and selection scopes, extract iframes from cloned content.
     // For mainContent scope, this was already done before Readability.
@@ -565,6 +629,7 @@ const ScrapLLMConvert = (function() {
       }
     });
 
+    removeRedditAds(content, ctx.url);
     removeIconLigatures(content);
 
     // Remove empty paragraphs and divs
@@ -801,7 +866,7 @@ const ScrapLLMConvert = (function() {
 
     switch (settings.contentScope) {
       case 'fullPage':
-        content = extractFullPageContent(docClone);
+        content = extractFullPageContent(docClone, ctx.url);
         textLength = ((content && content.textContent) || '').trim().length;
         break;
       case 'selection':

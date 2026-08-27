@@ -23,9 +23,12 @@ const ScrapLLMReddit = (function () {
   const DEFAULT_COMMENT_SORT = 'confidence'; // "Best"
   const LISTING_POST_LIMIT = 50;
   const LISTING_EXCERPT_LENGTH = 400;
-  // Beyond this depth we stop widening the indent so deep chains stay readable
-  // (and stay clear of the 4-space-per-level code block threshold in renderers).
-  const MAX_INDENT_DEPTH = 8;
+  // Comments carry their position in the tree ("1.2.3") instead of an indent.
+  // Indentation loses the thread the moment it is a few levels deep: the text
+  // wraps against the right margin, four spaces per level reads as a code block
+  // to most renderers, and a model has to count spaces to work out who replied
+  // to whom. A path states that outright, in one short token, and every comment
+  // stays flush left no matter how deep the chain runs.
 
   const VALID_SORTS = ['confidence', 'top', 'new', 'controversial', 'old', 'qa'];
 
@@ -137,11 +140,61 @@ const ScrapLLMReddit = (function () {
       .trim();
   }
 
-  function indentBlock(text, indent) {
-    return normalizeBody(text)
-      .split('\n')
-      .map(line => (line.trim() === '' ? '' : indent + line))
-      .join('\n');
+  // A comment body is arbitrary user Markdown, and on Reddit that includes
+  // headings. Left alone, a "## foo" inside a reply would read as a document
+  // section once the comments are no longer nested inside a list, so the hashes
+  // are escaped — the line still reads as written, without hijacking the
+  // outline the post header established.
+  function demoteHeadings(text) {
+    return String(text || '').replace(/^(#{1,6})(\s)/gm, '\\$1$2');
+  }
+
+  // One comment, rendered flat: its path, who wrote it, then the body. The
+  // blank line matters — without it a body starting with "-" or ">" would glue
+  // itself to the meta line.
+  function renderCommentBlock(path, meta, body) {
+    return `**[${path}]** ${meta}\n\n${demoteHeadings(normalizeBody(body))}`;
+  }
+
+  // Turns the stream of (depth) values the rendered page hands out into
+  // "1", "1.1", "1.2", "1.2.1", … Only comments that actually get rendered
+  // advance a counter, so a dropped reply leaves no hole in the numbering.
+  //
+  // skip() is what keeps that honest. The DOM lists comments flat, each one
+  // carrying its own depth, so dropping a deleted comment would otherwise
+  // leave its replies claiming a depth whose parent is no longer there — and
+  // they would be numbered as children of whichever branch came before, which
+  // is a different conversation. Recording the skip lets everything below it
+  // rise by one, which is exactly where the thread now sits.
+  function createPathTracker() {
+    const counters = [];
+    const skippedAncestors = [];
+
+    // A recorded skip stops being an ancestor as soon as the walk comes back
+    // up to its depth or shallower.
+    function prune(depth) {
+      while (skippedAncestors.length &&
+             skippedAncestors[skippedAncestors.length - 1] >= depth) {
+        skippedAncestors.pop();
+      }
+    }
+
+    return {
+      skip(depth) {
+        prune(depth);
+        skippedAncestors.push(depth);
+      },
+      next(depth) {
+        prune(depth);
+        const level = Math.max(0, depth - skippedAncestors.length);
+        counters.length = level + 1;
+        for (let i = 0; i < level; i++) {
+          if (!counters[i]) counters[i] = 1;
+        }
+        counters[level] = (counters[level] || 0) + 1;
+        return counters.join('.');
+      }
+    };
   }
 
   function joinMeta(parts) {
@@ -236,17 +289,55 @@ const ScrapLLMReddit = (function () {
     return lines.join('\n');
   }
 
-  function shouldSkipComment(comment) {
+  // Judged on the body alone, deliberately. A comment whose *account* was
+  // deleted still shows "[deleted]" as its author while the text survives, and
+  // that text is the thing worth copying — only an empty or tombstoned body
+  // means there is nothing left to read.
+  function isDeletedComment(comment) {
     const body = String(comment.body || '').trim();
-    const hasReplies = comment.replies && comment.replies.data &&
-                       Array.isArray(comment.replies.data.children) &&
-                       comment.replies.data.children.length > 0;
-    return (body === '[removed]' || body === '[deleted]' || body === '') && !hasReplies;
+    return body === '' || body === '[removed]' || body === '[deleted]';
   }
 
-  function renderCommentTree(children, depth, state) {
-    const lines = [];
+  // The rendered page has no body field to test, and Reddit localises its
+  // tombstones ("[удалено]", "[deleted]"), so the author label is the reliable
+  // signal: Reddit brackets it for a removed comment and a real username can
+  // never contain brackets.
+  function isDeletedAuthorLabel(author) {
+    return /^\[.+\]$/.test(String(author || '').trim());
+  }
+
+  function commentReplies(comment) {
+    return comment.replies && comment.replies.data
+      ? comment.replies.data.children || []
+      : [];
+  }
+
+  // Drops deleted comments outright and lifts their replies into the slot they
+  // vacated. Skipping the whole subtree instead would lose live answers hanging
+  // off a tombstone — a thread routinely has those — and rendering the
+  // tombstone to hold their place puts "[removed]" back in the output, which is
+  // exactly what this removes. Recursive, because a lifted reply can itself be
+  // deleted.
+  function withoutDeletedComments(children) {
+    const kept = [];
     for (const child of children) {
+      if (child.kind !== 't1' || !child.data) {
+        kept.push(child);
+        continue;
+      }
+      if (isDeletedComment(child.data)) {
+        kept.push(...withoutDeletedComments(commentReplies(child.data)));
+      } else {
+        kept.push(child);
+      }
+    }
+    return kept;
+  }
+
+  function renderCommentTree(children, parentPath, state) {
+    const lines = [];
+    let position = 0;
+    for (const child of withoutDeletedComments(children)) {
       if (child.kind === 'more') {
         // Reddit truncates long threads; surface what we did not load instead
         // of silently dropping it.
@@ -260,26 +351,24 @@ const ScrapLLMReddit = (function () {
       }
 
       const comment = child.data;
-      const indent = '  '.repeat(Math.min(depth, MAX_INDENT_DEPTH));
-      const replies = comment.replies && comment.replies.data ? comment.replies.data.children || [] : [];
+      const replies = commentReplies(comment);
 
-      if (shouldSkipComment(comment)) continue;
+      position += 1;
+      const path = parentPath ? `${parentPath}.${position}` : String(position);
 
       const meta = joinMeta([
-        `**${authorLabel(comment.author)}**`,
+        authorLabel(comment.author),
         formatPoints(comment.score, comment.score_hidden),
         formatUtc(comment.created_utc),
-        badges(comment),
-        depth > MAX_INDENT_DEPTH ? `depth ${depth}` : ''
+        badges(comment)
       ]);
-      lines.push(`${indent}- ${meta}`);
 
-      const body = normalizeBody(comment.body) || '_[removed]_';
-      lines.push(indentBlock(body, indent + '  '));
+      lines.push(renderCommentBlock(path, meta, normalizeBody(comment.body)));
+      lines.push('');
       state.rendered += 1;
 
       if (replies.length) {
-        const nested = renderCommentTree(replies, depth + 1, state);
+        const nested = renderCommentTree(replies, path, state);
         if (nested) lines.push(nested);
       }
       lines.push('');
@@ -299,14 +388,20 @@ const ScrapLLMReddit = (function () {
       limitReached: false,
       limit: resolveMaxComments(settings)
     };
-    const commentsMarkdown = renderCommentTree(commentChildren, 0, state);
+    const commentsMarkdown = renderCommentTree(commentChildren, '', state);
 
     const sortLabel = sortDisplayName(resolveSort(settings));
     const sections = [
       renderPostHeader(post),
       '## Post',
       renderPostBody(post, settings),
-      `## Comments (${formatNumber(state.rendered)} of ${formatNumber(post.num_comments || state.rendered)}, sorted by ${sortLabel})`
+      // Reddit's num_comments counts things the tree does not hand back the
+      // same way (removed stubs, comments folded into a "more" node), so it can
+      // land under what we actually rendered. "120 of 113" reads as a bug, so
+      // the total is only stated when it is one.
+      `## Comments (${formatNumber(state.rendered)}${
+        post.num_comments > state.rendered ? ` of ${formatNumber(post.num_comments)}` : ''
+      }, sorted by ${sortLabel})`
     ];
 
     sections.push(commentsMarkdown.trim() || '_No comments._');
@@ -464,23 +559,28 @@ const ScrapLLMReddit = (function () {
     const commentEls = Array.from(document.querySelectorAll('shreddit-comment'));
     const limit = resolveMaxComments(settings);
     const commentLines = [];
+    const paths = createPathTracker();
     let rendered = 0;
 
     for (const commentEl of commentEls) {
       if (rendered >= limit) break;
       const depth = Number(commentEl.getAttribute('depth')) || 0;
+      // Deleted comments are dropped, their replies are not: the skip is
+      // recorded so those replies move up a level instead of being numbered
+      // into the branch above them.
+      if (isDeletedAuthorLabel(commentEl.getAttribute('author'))) {
+        paths.skip(depth);
+        continue;
+      }
       const bodyMarkdown = htmlToMarkdown(ownCommentBody(commentEl), createTurndown);
       if (!bodyMarkdown) continue;
-      const indent = '  '.repeat(Math.min(depth, MAX_INDENT_DEPTH));
       const meta = joinMeta([
-        `**${authorLabel(commentEl.getAttribute('author'))}**`,
+        authorLabel(commentEl.getAttribute('author')),
         formatPoints(commentEl.getAttribute('score')),
         formatIsoTimestamp(commentEl.getAttribute('created')),
-        commentEl.hasAttribute('is-op') ? '[OP]' : '',
-        depth > MAX_INDENT_DEPTH ? `depth ${depth}` : ''
+        commentEl.hasAttribute('is-op') ? '[OP]' : ''
       ]);
-      commentLines.push(`${indent}- ${meta}`);
-      commentLines.push(indentBlock(bodyMarkdown, indent + '  '));
+      commentLines.push(renderCommentBlock(paths.next(depth), meta, bodyMarkdown));
       commentLines.push('');
       rendered += 1;
     }
@@ -539,34 +639,41 @@ const ScrapLLMReddit = (function () {
     const limit = resolveMaxComments(settings);
     const commentEls = Array.from(document.querySelectorAll('.commentarea .thing.comment'));
     const commentLines = [];
+    const paths = createPathTracker();
     let rendered = 0;
 
     for (const commentEl of commentEls) {
       if (rendered >= limit) break;
-      if (commentEl.classList.contains('deleted')) continue;
       // old.reddit nests replies in .child wrappers; ancestor count is the depth.
+      // Measured before anything can skip this comment, because a skip has to
+      // record the depth it happened at for the replies below it to renumber.
       let depth = 0;
       let parent = commentEl.parentElement;
       while (parent) {
         if (parent.classList && parent.classList.contains('child')) depth += 1;
         parent = parent.parentElement;
       }
+      if (commentEl.classList.contains('deleted')) {
+        paths.skip(depth);
+        continue;
+      }
       const entry = commentEl.querySelector(':scope > .entry');
       if (!entry) continue;
+      if (isDeletedAuthorLabel((entry.querySelector('.author') || {}).textContent)) {
+        paths.skip(depth);
+        continue;
+      }
       const bodyMarkdown = htmlToMarkdown(entry.querySelector('.usertext-body .md'), createTurndown);
       if (!bodyMarkdown) continue;
       const scoreNode = entry.querySelector('.score.unvoted');
       const timeNode = entry.querySelector('.tagline time');
-      const indent = '  '.repeat(Math.min(depth, MAX_INDENT_DEPTH));
       const meta = joinMeta([
-        `**${authorLabel((entry.querySelector('.author') || {}).textContent)}**`,
+        authorLabel((entry.querySelector('.author') || {}).textContent),
         scoreNode ? formatPoints(scoreNode.getAttribute('title') || scoreNode.textContent.replace(/\D+/g, '')) : 'score hidden',
         timeNode ? formatIsoTimestamp(timeNode.getAttribute('datetime')) : '',
-        entry.querySelector('.submitter') ? '[OP]' : '',
-        depth > MAX_INDENT_DEPTH ? `depth ${depth}` : ''
+        entry.querySelector('.submitter') ? '[OP]' : ''
       ]);
-      commentLines.push(`${indent}- ${meta}`);
-      commentLines.push(indentBlock(bodyMarkdown, indent + '  '));
+      commentLines.push(renderCommentBlock(paths.next(depth), meta, bodyMarkdown));
       commentLines.push('');
       rendered += 1;
     }

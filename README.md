@@ -19,7 +19,7 @@ Chrome and Firefox. Conversion happens entirely in your browser — no account, 
 
 Site-aware extraction where the generic path loses the point:
 
-- **Reddit** — the post plus its full comment tree (author, score, flair, nesting), read from Reddit's own JSON so collapsed replies survive.
+- **Reddit** — the post plus its full comment tree (author, score, flair), read from Reddit's own JSON so collapsed replies survive. Replies are addressed by their position in the tree — `[1]`, `[1.1]`, `[1.1.1]` — rather than by indentation, so a chain nine deep reads the same as a top-level comment instead of crawling down the right margin. Deleted comments are dropped entirely and their surviving replies move up into the slot, and Reddit's own promoted posts and comment-tree ads are removed on every path, including full-page copies.
 - **X (Twitter)** — threads with replies, quoted posts and engagement counts; profiles and timelines as an index.
 - **Chats** — ChatGPT, Claude, Gemini, Google AI Mode, Grok, Perplexity, DeepSeek, Copilot, Cursor, and self-hosted front-ends on a local port (Open WebUI, LibreChat, LobeChat, AnythingLLM, Jan). On ChatGPT and Claude the transcript comes from the site's own API and follows the branch you actually see, so messages you edited away stay out.
 

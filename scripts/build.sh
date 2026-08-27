@@ -5,7 +5,7 @@
 # Usage: ./scripts/build.sh [chrome|firefox|source|all]
 
 # Default values
-VERSION="2.2.1"
+VERSION="2.2.2"
 TARGET="all"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -194,7 +194,10 @@ build_firefox() {
     .browser_specific_settings = {
       "gecko": {
         "id": "scrapllm@dekrezz.github.io",
-        "strict_min_version": "109.0"
+        "strict_min_version": "109.0",
+        "data_collection_permissions": {
+          "required": ["searchTerms"]
+        }
       }
     } |
     .permissions = (.permissions - ["offscreen"]) |
