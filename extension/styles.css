@@ -1285,9 +1285,14 @@ input[type="checkbox"] {
   transition: background-color var(--t-fast), box-shadow var(--t-fast);
 }
 
+/* No focus ring. A text field announces its own focus with the caret, and the
+   surface lifts to meet it; the blue halo on top of that was a third statement
+   of the same fact, sitting directly under a button it had nothing to do with.
+   (:focus-visible would not have helped — browsers set it on a text input even
+   for a plain mouse click.) */
 .research-field:focus-within {
   background: var(--surface-color);
-  box-shadow: inset 0 0 0 1px var(--primary-color), 0 0 0 3px var(--primary-tint);
+  box-shadow: inset 0 0 0 1px var(--separator);
 }
 
 .research-glyph {
@@ -1362,6 +1367,18 @@ input[type="checkbox"] {
   height: 1rem;
 }
 
+/* The sheet's own action is the system blue, not the yellow key. Two yellow
+   controls a centimetre apart — this one and the go arrow in the bar directly
+   below it — read as the same button drawn twice; the blue says they are two
+   different things. */
+#researchStartBtn {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--primary-color) 86%, white) 0%,
+    var(--primary-color) 55%,
+    color-mix(in srgb, var(--primary-color) 88%, black) 100%);
+  color: #fff;
+}
+
 /* Sheet ---------------------------------------------------------------- */
 
 .research-sheet {
@@ -1373,9 +1390,11 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: var(--gap-md);
-  /* The bottom pad is the bar's height: the sheet passes under the bar
-     instead of butting against it. */
-  padding: var(--gap-md) var(--edge) var(--research-bar-h);
+  /* The bottom pad is the bar's height plus a gap. Height alone put the last
+     control flush against the bar's top edge, so the separator line landed on
+     the button and the two surfaces read as one; the gap keeps the button
+     clear of it. */
+  padding: var(--gap-md) var(--edge) calc(var(--research-bar-h) + var(--gap-md));
   /* Never covers the header — there is always a way out, and a light
      translucent surface never stacks on another one. This is the value before
      the first open; popup.js then measures the header's real bottom edge, so
