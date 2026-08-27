@@ -88,3 +88,40 @@ operated by the developer. There is no analytics, telemetry or account.
 3. Research is the only feature that makes a third-party request: type a
    question into the bar at the bottom of the popup and press the arrow. It will
    ask for optional site access first; both answers are worth testing.
+
+## The 32 linter warnings
+
+The package passes validation with 0 errors. Every warning falls into one of
+four groups, and none of them is a live code path on Firefox.
+
+**Feature-detected Chrome APIs (18 warnings).** `runtime.getContexts`,
+`offscreen.createDocument`, `offscreen.closeDocument` and `storage.session` are
+each reached only behind an explicit guard in `background.js` —
+`if (typeof chrome.runtime.getContexts === 'function')` (line 83),
+`if (chrome.offscreen)` (line 90) and `if (chrome.storage.session)` (line 126).
+The file is shared with the Chrome build; on Firefox those branches simply never
+run, and the Firefox manifest drops the `offscreen` permission at build time.
+Research falls back to a background tab and an in-memory store respectively.
+
+**Manifest keys newer than strict_min_version (4 warnings).**
+`data_collection_permissions` (Firefox 140+) and `optional_host_permissions`
+(128+) are declared while `strict_min_version` stays at 109. Both are ignored by
+older builds rather than failing, and the code accounts for it:
+`requestResearchHostAccess()` in `popup.js` handles the absence of the optional
+origin API and reports it to the user instead of assuming it exists. Raising the
+minimum would drop working installs to silence a warning.
+
+**innerHTML (6 warnings).** None takes attacker-controlled input into a live
+page:
+- `content.js:858` — one of three hard-coded SVG string literals defined
+  directly above (lines 832-856). No interpolation.
+- `convert-core.js:115` — copies the page into an inert document created with
+  `implementation.createHTMLDocument()`. Inert documents do not execute scripts
+  or load resources; this is how Readability is given a private copy.
+- `convert-core.js:969` — truncates already-inert cloned content into a detached
+  `div` that is only handed to Turndown, never inserted into any document.
+- `libs/readability.js:1549,1928` — inside the unmodified upstream library.
+
+**`Function` in jszip.min.js (1 warning).** Part of the unmodified official
+JSZip 3.10.1 release, checksum above. We do not call it and execute no remote
+code.
