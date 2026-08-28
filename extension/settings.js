@@ -52,6 +52,16 @@ const SettingsUtils = (function() {
       youtubeIncludeComments: true,
       // Comment ceiling; 'all' means no cap. YouTube pages them 20 at a time.
       youtubeMaxComments: 100,
+      // Telegram-aware extraction: the open channel, group, forum topic or
+      // private chat as a transcript. Telegram has no REST API for a user
+      // account, so this reads the rendered conversation.
+      telegramMode: true,
+      // Ceiling counted from the newest message; 'all' means whatever
+      // scrolling reaches inside the time budget.
+      telegramMaxMessages: 200,
+      // Optional YYYY-MM-DD bounds. Empty means unbounded on that side.
+      telegramDateFrom: '',
+      telegramDateTo: '',
       // Discord-aware extraction: the open channel as a transcript, read from
       // the rendered list. Deliberately not the API — that needs the account
       // token, which Discord bans for.

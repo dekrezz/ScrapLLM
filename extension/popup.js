@@ -108,6 +108,14 @@ const convertOverrideBtn = document.getElementById("convertOverrideBtn");
 const convertOverrideLabel = convertOverrideBtn ? convertOverrideBtn.querySelector(".override-label") : null;
 const copySelectionBtn = document.getElementById("copySelectionBtn");
 const chatAction = document.getElementById("chatAction");
+const telegramAction = document.getElementById("telegramAction");
+const copyTelegramBtn = document.getElementById("copyTelegramBtn");
+const telegramBtnText = document.getElementById("telegramBtnText");
+const telegramLimitBtn = document.getElementById("telegramLimitBtn");
+const telegramLimitMenu = document.getElementById("telegramLimitMenu");
+const telegramDateFromInput = document.getElementById("telegramDateFrom");
+const telegramDateToInput = document.getElementById("telegramDateTo");
+const telegramDateClearBtn = document.getElementById("telegramDateClear");
 const copyChatBtn = document.getElementById("copyChatBtn");
 const chatLimitBtn = document.getElementById("chatLimitBtn");
 const chatLimitMenu = document.getElementById("chatLimitMenu");
@@ -490,6 +498,63 @@ async function initChatAction() {
   }
 }
 
+let telegramMaxMessagesValue = "200";
+
+function setTelegramLimit(value, options) {
+  telegramMaxMessagesValue = String(value);
+  telegramLimitMenu.querySelectorAll(".split-btn-menu-item[data-value]").forEach((item) => {
+    const selected = item.dataset.value === telegramMaxMessagesValue;
+    item.classList.toggle("is-selected", selected);
+    item.setAttribute("aria-checked", selected ? "true" : "false");
+  });
+  if (!options || options.persist !== false) saveSettings();
+}
+
+function isTelegramMenuOpen() {
+  return !telegramLimitMenu.classList.contains("hidden");
+}
+
+function toggleTelegramMenu(open) {
+  telegramLimitMenu.classList.toggle("hidden", !open);
+  telegramLimitBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+// What the button says. "Convert & Copy" is silent about which of four
+// documents you would get, so the label names the target: the topic on a forum,
+// the person in a private chat, the channel or group otherwise.
+function telegramButtonLabel(info) {
+  const kindWord = info.kind === "topic" ? "topic"
+    : info.kind === "channel" ? "channel"
+    : info.kind === "group" ? "group"
+    : "chat";
+  const name = (info.kind === "topic" && info.topicName) ? info.topicName : info.title;
+  const trimmed = (name || "Telegram").length > 22 ? (name || "").slice(0, 21) + "…" : (name || "Telegram");
+  return `Copy ${trimmed} ${kindWord}`;
+}
+
+// Offer the Telegram action only on an open conversation, and take the page
+// conversion off the front row while it is up: on a virtualised message list
+// "the page" is whichever messages happen to be painted, dressed up as a
+// document.
+async function initTelegramAction() {
+  try {
+    const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
+    if (!tabs || tabs.length === 0) return;
+
+    const response = await browserAPI.tabs.sendMessage(tabs[0].id, { action: "getTelegramInfo" });
+    const info = response && response.success ? response.info : null;
+    if (!info || !info.isTelegram) return;
+
+    telegramBtnText.textContent = telegramButtonLabel(info);
+    copyTelegramBtn.title = `Copy this Telegram ${info.kind === "private" ? "chat" : info.kind} as Markdown`;
+    telegramAction.classList.remove("hidden");
+    convertSplit.classList.add("hidden");
+    chatPageFallback = true;
+  } catch (error) {
+    // No content script on this page.
+  }
+}
+
 // Load user settings
 async function loadSettings() {
   try {
@@ -522,6 +587,9 @@ async function loadSettings() {
     githubIncludeReadmeCheckbox.checked = data.githubIncludeReadme !== false;
     githubIncludeTreeCheckbox.checked = data.githubIncludeTree !== false;
     githubMaxTreeEntriesSelect.value = String(data.githubMaxTreeEntries);
+    setTelegramLimit(String(data.telegramMaxMessages ?? "200"), { persist: false });
+    telegramDateFromInput.value = data.telegramDateFrom || "";
+    telegramDateToInput.value = data.telegramDateTo || "";
     youtubeModeCheckbox.checked = data.youtubeMode !== false;
     youtubeIncludeDescriptionCheckbox.checked = data.youtubeIncludeDescription !== false;
     youtubeIncludeCommentsCheckbox.checked = data.youtubeIncludeComments !== false;
@@ -568,6 +636,9 @@ async function saveSettings() {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const telegramMaxMessages = telegramMaxMessagesValue;
+    const telegramDateFrom = telegramDateFromInput.value;
+    const telegramDateTo = telegramDateToInput.value;
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
@@ -601,6 +672,9 @@ async function saveSettings() {
       githubIncludeReadme,
       githubIncludeTree,
       githubMaxTreeEntries,
+      telegramMaxMessages,
+      telegramDateFrom,
+      telegramDateTo,
       youtubeMode,
       youtubeIncludeDescription,
       youtubeIncludeComments,
@@ -755,6 +829,9 @@ function getCurrentSettings() {
     githubIncludeReadme: githubIncludeReadmeCheckbox.checked,
     githubIncludeTree: githubIncludeTreeCheckbox.checked,
     githubMaxTreeEntries: githubMaxTreeEntriesSelect.value,
+    telegramMaxMessages: telegramMaxMessagesValue,
+    telegramDateFrom: telegramDateFromInput.value,
+    telegramDateTo: telegramDateToInput.value,
     youtubeMode: youtubeModeCheckbox.checked,
     youtubeIncludeDescription: youtubeIncludeDescriptionCheckbox.checked,
     youtubeIncludeComments: youtubeIncludeCommentsCheckbox.checked,
@@ -888,6 +965,9 @@ async function convertToMarkdown(scopeOverride) {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const telegramMaxMessages = telegramMaxMessagesValue;
+    const telegramDateFrom = telegramDateFromInput.value;
+    const telegramDateTo = telegramDateToInput.value;
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
@@ -919,6 +999,9 @@ async function convertToMarkdown(scopeOverride) {
         githubIncludeReadme,
         githubIncludeTree,
         githubMaxTreeEntries,
+        telegramMaxMessages,
+        telegramDateFrom,
+        telegramDateTo,
         youtubeMode,
         youtubeIncludeDescription,
         youtubeIncludeComments,
@@ -1015,6 +1098,9 @@ async function downloadMarkdown() {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const telegramMaxMessages = telegramMaxMessagesValue;
+    const telegramDateFrom = telegramDateFromInput.value;
+    const telegramDateTo = telegramDateToInput.value;
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
@@ -1046,6 +1132,9 @@ async function downloadMarkdown() {
         githubIncludeReadme,
         githubIncludeTree,
         githubMaxTreeEntries,
+        telegramMaxMessages,
+        telegramDateFrom,
+        telegramDateTo,
         youtubeMode,
         youtubeIncludeDescription,
         youtubeIncludeComments,
@@ -1186,6 +1275,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await loadSettings();
   initSelectionAction();
   initChatAction();
+  initTelegramAction();
 
   // Detect multi-tab selection (non-blocking, runs in background)
   // UI defaults to single-tab mode, then switches if multiple tabs detected
@@ -1200,6 +1290,37 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   copySelectionBtn.addEventListener("click", () => convertToMarkdown("selection"));
   copyChatBtn.addEventListener("click", () => convertToMarkdown("chat"));
+
+  copyTelegramBtn.addEventListener("click", () => {
+    toggleTelegramMenu(false);
+    convertToMarkdown();
+  });
+
+  telegramLimitBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleTelegramMenu(!isTelegramMenuOpen());
+  });
+
+  telegramLimitMenu.querySelectorAll(".split-btn-menu-item[data-value]").forEach((item) => {
+    item.addEventListener("click", () => {
+      setTelegramLimit(item.dataset.value);
+      toggleTelegramMenu(false);
+    });
+  });
+
+  // A date bound is a filter, not an action: picking one leaves the menu open
+  // so the other end of the range can be set in the same visit.
+  [telegramDateFromInput, telegramDateToInput].forEach((input) => {
+    input.addEventListener("change", () => saveSettings());
+    input.addEventListener("click", (e) => e.stopPropagation());
+  });
+
+  telegramDateClearBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    telegramDateFromInput.value = "";
+    telegramDateToInput.value = "";
+    saveSettings();
+  });
   chatPageFallbackBtn.addEventListener("click", () => {
     closeChatLimitMenu();
     convertToMarkdown();
@@ -1242,6 +1363,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("click", (e) => {
     if (isConvertMenuOpen() && !convertSplit.contains(e.target)) {
       closeConvertMenu();
+    }
+    if (isTelegramMenuOpen() && !telegramAction.contains(e.target)) {
+      toggleTelegramMenu(false);
     }
     if (isChatLimitMenuOpen() && !chatAction.contains(e.target)) {
       closeChatLimitMenu();

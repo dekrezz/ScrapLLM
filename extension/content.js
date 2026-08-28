@@ -134,6 +134,21 @@
       return true;
     }
 
+    // Telegram probe: which of the four conversation kinds is open, and what
+    // is it called? The popup uses this to label its own button, so the naming
+    // rules stay in one place.
+    if (request.action === 'getTelegramInfo') {
+      try {
+        const info = typeof ScrapLLMTelegram !== 'undefined'
+          ? ScrapLLMTelegram.detect(window.location)
+          : null;
+        sendResponse({ success: true, info });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+      return true;
+    }
+
     // Get debug logs handler
     if (request.action === 'getDebugLogs') {
       sendResponse({ success: true, logs: DebugLog.getLogs() });
@@ -635,6 +650,31 @@
         // A private repo, a spent rate limit or an offline API is a reason to
         // fall back to the page in front of the user, not to fail the copy.
         DebugLog.error('GitHub extractor failed; using generic extraction', error);
+      }
+    }
+
+    // Telegram: the conversation is virtualised and there is no API a browser
+    // extension may use, so the transcript is read from the rendered list.
+    if (settings.telegramMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof ScrapLLMTelegram !== 'undefined' &&
+        ScrapLLMTelegram.isTelegramPage(window.location)) {
+      DebugLog.log('Telegram conversation detected');
+      try {
+        const telegram = await ScrapLLMTelegram.convert(settings, {
+          logger: {
+            log: (message, data) => DebugLog.log(message, data),
+            error: (message, error) => DebugLog.error(message, error)
+          },
+          createTurndown: () => ScrapLLMConvert.configureTurndownService(settings)
+        });
+        if (telegram) {
+          return ScrapLLMConvert.postProcessMarkdown(
+            telegram.markdown, settings, telegram.articleData, pageContext());
+        }
+        DebugLog.log('Telegram extractor found no messages; using generic extraction');
+      } catch (error) {
+        DebugLog.error('Telegram extractor failed; using generic extraction', error);
       }
     }
 
