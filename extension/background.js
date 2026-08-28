@@ -170,6 +170,23 @@ const browserAPI = (function() {
   return api;
 })();
 
+// The manifest is the single source of truth for what a content script is made
+// of. Hard-coding the list here meant every extractor added since it was
+// written — convert-core, selection, chat, reddit, x, github, youtube,
+// discord — was missing from an injected tab, and content.js silently fell back
+// to the generic path because `typeof ScrapLLMGitHub` was "undefined". Reading
+// the manifest cannot drift.
+function contentScriptFiles() {
+  try {
+    const manifest = browserAPI.runtime.getManifest();
+    const entry = (manifest.content_scripts || [])[0];
+    if (entry && Array.isArray(entry.js) && entry.js.length) return entry.js;
+  } catch (error) {
+    console.error("Cannot read content script list from the manifest:", error);
+  }
+  return ["libs/readability.js", "libs/turndown.js", "convert-core.js", "content.js"];
+}
+
 // Ensure content script is injected before sending messages
 async function ensureContentScriptLoaded(tabId) {
   try {
@@ -178,7 +195,7 @@ async function ensureContentScriptLoaded(tabId) {
       // If error, inject the content script
       return browserAPI.scripting.executeScript({
         target: { tabId: tabId },
-        files: ["libs/readability.js", "libs/turndown.js", "content.js"]
+        files: contentScriptFiles()
       });
     });
     return true;

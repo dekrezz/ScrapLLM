@@ -318,7 +318,7 @@ const ScrapLLMReddit = (function () {
   // tombstone to hold their place puts "[removed]" back in the output, which is
   // exactly what this removes. Recursive, because a lifted reply can itself be
   // deleted.
-  function withoutDeletedComments(children) {
+  function withoutDeletedComments(children, state) {
     const kept = [];
     for (const child of children) {
       if (child.kind !== 't1' || !child.data) {
@@ -326,7 +326,8 @@ const ScrapLLMReddit = (function () {
         continue;
       }
       if (isDeletedComment(child.data)) {
-        kept.push(...withoutDeletedComments(commentReplies(child.data)));
+        if (state) state.deleted += 1;
+        kept.push(...withoutDeletedComments(commentReplies(child.data), state));
       } else {
         kept.push(child);
       }
@@ -334,10 +335,163 @@ const ScrapLLMReddit = (function () {
     return kept;
   }
 
+  // ==========================================================================
+  // COLLAPSED BRANCHES
+  // ==========================================================================
+
+  // Reddit does not send a whole thread. Past a certain width or depth it
+  // substitutes a `more` node — the "N more replies" line on the page — and the
+  // replies behind it are simply absent from the JSON. Counting them and moving
+  // on, which is what this used to do, means the copy silently stops short of
+  // the conversation the user is looking at.
+  //
+  // They are fetched from `/api/morechildren`, the same endpoint the page calls
+  // when that line is clicked, same-origin and with the user's session, so a
+  // branch they had already expanded is included either way.
+  const MORE_BATCH = 100;          // Reddit's documented ceiling per request
+  const MORE_REQUEST_BUDGET = 20;  // requests per thread
+  const MORE_TIME_BUDGET = 30000;  // ms
+
+  function indexTree(children, byId, moreNodes, container) {
+    for (const child of children) {
+      if (!child || !child.data) continue;
+      if (child.kind === 'more') {
+        moreNodes.push({ node: child, container });
+        continue;
+      }
+      if (child.kind !== 't1') continue;
+      byId.set(child.data.id, child);
+      const replies = child.data.replies;
+      if (replies && replies.data && Array.isArray(replies.data.children)) {
+        indexTree(replies.data.children, byId, moreNodes, replies.data.children);
+      }
+    }
+  }
+
+  function repliesArrayFor(comment) {
+    if (!comment.data.replies || typeof comment.data.replies !== 'object') {
+      comment.data.replies = { kind: 'Listing', data: { children: [] } };
+    }
+    if (!Array.isArray(comment.data.replies.data.children)) {
+      comment.data.replies.data.children = [];
+    }
+    return comment.data.replies.data.children;
+  }
+
+  async function fetchMoreChildren(linkId, ids, sort) {
+    const url = new URL('https://www.reddit.com/api/morechildren.json');
+    url.searchParams.set('api_type', 'json');
+    url.searchParams.set('link_id', linkId);
+    url.searchParams.set('children', ids.join(','));
+    url.searchParams.set('sort', sort);
+    url.searchParams.set('raw_json', '1');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), JSON_FETCH_TIMEOUT);
+    try {
+      const response = await fetch(url.toString(), {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`morechildren answered HTTP ${response.status}`);
+      const json = await response.json();
+      return (json && json.json && json.json.data && json.json.data.things) || [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  // Fetched replies come back flat, each carrying its parent's fullname, so the
+  // hierarchy is rebuilt by looking the parent up. A reply whose parent arrived
+  // in the same batch is handled by indexing as we go.
+  function graftThings(things, byId, rootChildren, moreNodes) {
+    for (const thing of things) {
+      if (!thing || !thing.data) continue;
+      const parentFullname = String(thing.data.parent_id || '');
+      const parentId = parentFullname.replace(/^t\d_/, '');
+      const parent = byId.get(parentId);
+      const container = parent ? repliesArrayFor(parent) : (parentFullname.startsWith('t3_') ? rootChildren : null);
+      if (!container) continue;
+
+      if (thing.kind === 'more') {
+        moreNodes.push({ node: thing, container });
+        container.push(thing);
+        continue;
+      }
+      if (thing.kind !== 't1') continue;
+
+      container.push(thing);
+      byId.set(thing.data.id, thing);
+    }
+  }
+
+  // Mutates `json` in place so the renderer sees a complete tree. Returns what
+  // could not be fetched, which the thread reports rather than hiding.
+  async function expandCollapsedReplies(json, settings, postId) {
+    const rootChildren = (json[1] && json[1].data && json[1].data.children) || [];
+    const linkId = `t3_${postId}`;
+    const sort = resolveSort(settings);
+    const limit = resolveMaxComments(settings);
+    const deadline = Date.now() + MORE_TIME_BUDGET;
+
+    const byId = new Map();
+    let moreNodes = [];
+    indexTree(rootChildren, byId, moreNodes, rootChildren);
+
+    let requests = 0;
+    let unreachable = 0;
+
+    while (moreNodes.length && requests < MORE_REQUEST_BUDGET && Date.now() < deadline) {
+      // Every comment already in hand counts against the ceiling: past it,
+      // fetching more would only be discarded by the renderer.
+      if (byId.size >= limit) break;
+
+      const pending = moreNodes;
+      moreNodes = [];
+
+      const ids = [];
+      for (const { node, container } of pending) {
+        const children = (node.data && node.data.children) || [];
+        if (!children.length) {
+          // A "continue this thread" link: the replies live under their own
+          // permalink and cannot be had from this endpoint.
+          unreachable += Number(node.data && node.data.count) || 0;
+          continue;
+        }
+        ids.push(...children);
+        const at = container.indexOf(node);
+        if (at !== -1) container.splice(at, 1);
+      }
+      if (!ids.length) break;
+
+      for (let i = 0; i < ids.length && requests < MORE_REQUEST_BUDGET; i += MORE_BATCH) {
+        const batch = ids.slice(i, i + MORE_BATCH);
+        requests += 1;
+        try {
+          const things = await fetchMoreChildren(linkId, batch, sort);
+          graftThings(things, byId, rootChildren, moreNodes);
+        } catch (error) {
+          logger.error('Reddit collapsed replies could not be fetched', error);
+          unreachable += batch.length;
+        }
+        if (Date.now() >= deadline) break;
+      }
+    }
+
+    // Whatever is still standing after the budget ran out.
+    for (const { node } of moreNodes) {
+      unreachable += Number(node.data && node.data.count) || 0;
+    }
+
+    logger.log('Reddit collapsed replies expanded', { requests, unreachable, total: byId.size });
+    return unreachable;
+  }
+
   function renderCommentTree(children, parentPath, state) {
     const lines = [];
     let position = 0;
-    for (const child of withoutDeletedComments(children)) {
+    for (const child of withoutDeletedComments(children, state)) {
       if (child.kind === 'more') {
         // Reddit truncates long threads; surface what we did not load instead
         // of silently dropping it.
@@ -376,7 +530,7 @@ const ScrapLLMReddit = (function () {
     return lines.join('\n').replace(/\n{3,}/g, '\n\n');
   }
 
-  function renderThread(json, settings) {
+  function renderThread(json, settings, unreachable) {
     const post = json && json[0] && json[0].data && json[0].data.children &&
                  json[0].data.children[0] && json[0].data.children[0].data;
     if (!post) throw new Error('Reddit JSON did not contain a post');
@@ -384,7 +538,8 @@ const ScrapLLMReddit = (function () {
     const commentChildren = (json[1] && json[1].data && json[1].data.children) || [];
     const state = {
       rendered: 0,
-      notLoaded: 0,
+      notLoaded: Number(unreachable) || 0,
+      deleted: 0,
       limitReached: false,
       limit: resolveMaxComments(settings)
     };
@@ -395,12 +550,12 @@ const ScrapLLMReddit = (function () {
       renderPostHeader(post),
       '## Post',
       renderPostBody(post, settings),
-      // Reddit's num_comments counts things the tree does not hand back the
-      // same way (removed stubs, comments folded into a "more" node), so it can
-      // land under what we actually rendered. "120 of 113" reads as a bug, so
-      // the total is only stated when it is one.
+      // Reddit's num_comments counts deleted stubs, which this drops, so the
+      // two numbers rarely match. Stating the total on its own reads as loss —
+      // "41 of 46" looks like five comments went missing — so the difference is
+      // accounted for instead of left hanging.
       `## Comments (${formatNumber(state.rendered)}${
-        post.num_comments > state.rendered ? ` of ${formatNumber(post.num_comments)}` : ''
+        state.deleted > 0 ? `, ${formatNumber(state.deleted)} deleted and dropped` : ''
       }, sorted by ${sortLabel})`
     ];
 
@@ -411,7 +566,7 @@ const ScrapLLMReddit = (function () {
       notes.push(`Only the first ${formatNumber(state.limit)} comments were included (limit set in ScrapLLM settings).`);
     }
     if (state.notLoaded > 0) {
-      notes.push(`${formatNumber(state.notLoaded)} further replies were collapsed by Reddit and not loaded.`);
+      notes.push(`${formatNumber(state.notLoaded)} further replies sit behind Reddit's "continue this thread" links, which live under their own permalinks and were not fetched.`);
     }
     if (notes.length) {
       sections.push(`---\n> **Note:** ${notes.join(' ')}`);
@@ -750,7 +905,21 @@ const ScrapLLMReddit = (function () {
     try {
       logger.log('Fetching Reddit JSON', { url: jsonUrl, pageType });
       const json = await fetchJson(jsonUrl);
-      if (pageType === 'post') return renderThread(json, options);
+      if (pageType === 'post') {
+        // Fill in the branches Reddit collapsed before rendering, so the copy
+        // matches the conversation rather than stopping at the first
+        // "N more replies".
+        let unreachable = 0;
+        const postId = POST_PATH_RE.exec(window.location.pathname);
+        if (postId) {
+          try {
+            unreachable = await expandCollapsedReplies(json, options, postId[1]);
+          } catch (error) {
+            logger.error('Reddit collapsed-reply expansion failed', error);
+          }
+        }
+        return renderThread(json, options, unreachable);
+      }
       const listing = renderListing(json, options);
       if (listing) return listing;
       // Nothing post-like on this listing (empty feed, profile with no
