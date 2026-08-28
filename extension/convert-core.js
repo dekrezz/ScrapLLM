@@ -11,7 +11,7 @@
 // surrounding document is the extension's own page and would produce a
 // chrome-extension:// "Source:" line and extension-relative links.
 
-const ScrapLLMConvert = (function() {
+var ScrapLLMConvert = typeof ScrapLLMConvert !== 'undefined' ? ScrapLLMConvert : (function() {
   'use strict';
 
   const MIN_CONTENT_LENGTH = 50;      // Minimum meaningful iframe content length

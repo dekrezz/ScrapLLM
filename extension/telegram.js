@@ -15,7 +15,7 @@
 //   group     #-100…            an author per message, grouped when consecutive
 //   topic     #-100…_<topicId>  a group filtered to one forum topic
 //   private   #<positive id>    no authors at all; only "own" separates sides
-const ScrapLLMTelegram = (function () {
+var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegram : (function () {
   'use strict';
 
   const DEFAULT_MAX_MESSAGES = 200;

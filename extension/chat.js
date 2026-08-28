@@ -16,7 +16,7 @@
 //    (Open WebUI, LibreChat, LobeChat, AnythingLLM, Jan…). Known layouts are
 //    matched first; unknown ones fall back to a role-detection heuristic, so a
 //    front-end nobody has heard of still works if it labels its turns at all.
-const ScrapLLMChat = (function () {
+var ScrapLLMChat = typeof ScrapLLMChat !== 'undefined' ? ScrapLLMChat : (function () {
   'use strict';
 
   const ROOT_PARENT = '00000000-0000-4000-8000-000000000000';

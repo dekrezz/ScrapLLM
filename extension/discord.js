@@ -11,7 +11,7 @@
 // destroyed, so a single pass sees a few dozen messages at most. Older history
 // is loaded by scrolling the list's own container upward — the window itself
 // does not scroll.
-const ScrapLLMDiscord = (function () {
+var ScrapLLMDiscord = typeof ScrapLLMDiscord !== 'undefined' ? ScrapLLMDiscord : (function () {
   'use strict';
 
   const DEFAULT_MAX_MESSAGES = 200;

@@ -537,6 +537,21 @@ Source: [{title}]({url})</textarea>
               </label>
             </div>
 
+            <div class="setting-group" id="aboutGroup">
+              <h3>About</h3>
+              <div class="about-row">
+                <span>Version</span>
+                <span id="aboutVersion" class="about-value">—</span>
+              </div>
+              <div class="about-row">
+                <span>Build</span>
+                <span id="aboutBuild" class="about-value">—</span>
+              </div>
+              <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
+                The build id is a hash of the extension's own files. It changes whenever the code does, so a reloaded build that still shows the old id did not actually take.
+              </small>
+            </div>
+
             <div class="setting-group">
               <h3>YouTube</h3>
               <label class="setting-option">

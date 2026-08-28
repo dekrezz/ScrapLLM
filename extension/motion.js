@@ -9,7 +9,7 @@
 // Parameters follow Apple's designer-facing pair rather than mass/stiffness/
 // damping: `response` (seconds to approach the target) and `damping` (1 =
 // critically damped, no overshoot; < 1 bounces).
-const ScrapLLMMotion = (function () {
+var ScrapLLMMotion = typeof ScrapLLMMotion !== 'undefined' ? ScrapLLMMotion : (function () {
   'use strict';
 
   const REST_DISPLACEMENT = 0.01;

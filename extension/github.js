@@ -14,7 +14,7 @@
 // can call it with no extra host permission. Unauthenticated callers get 60
 // requests an hour per IP; a repository costs three, and running out is
 // reported by name instead of failing silently.
-const ScrapLLMGitHub = (function () {
+var ScrapLLMGitHub = typeof ScrapLLMGitHub !== 'undefined' ? ScrapLLMGitHub : (function () {
   'use strict';
 
   const API = 'https://api.github.com';

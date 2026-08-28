@@ -2141,3 +2141,23 @@ input[type="checkbox"] {
 .telegram-date-clear {
   text-align: left;
 }
+
+/* About ----------------------------------------------------------------- */
+
+.about-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-sm);
+  padding: 0.25rem 0;
+  font-size: 0.8125rem;
+  color: var(--label-secondary);
+}
+
+/* The build id is there to be compared, so it is monospaced and selectable. */
+.about-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--label-primary);
+  user-select: text;
+}

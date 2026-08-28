@@ -8,7 +8,7 @@
 // The parsing itself happens elsewhere (an offscreen document on Chrome, the
 // MV2 background page on Firefox) because a service worker has no DOM.
 
-const ScrapLLMQuietCapture = (function() {
+var ScrapLLMQuietCapture = typeof ScrapLLMQuietCapture !== 'undefined' ? ScrapLLMQuietCapture : (function() {
   'use strict';
 
   // A page that has not answered in 10 s is not worth a 20 s tab either.

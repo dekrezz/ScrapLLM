@@ -21,7 +21,7 @@
 // Every getter therefore reads "best available source first" rather than
 // assuming one layout, and `convert()` returns null when a route holds no
 // readable post so the caller can fall back to the generic pipeline.
-const ScrapLLMX = (function () {
+var ScrapLLMX = typeof ScrapLLMX !== 'undefined' ? ScrapLLMX : (function () {
   'use strict';
 
   // /<handle>/status/<id> (also the legacy /statuses/ form)

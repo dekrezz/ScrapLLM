@@ -9,7 +9,7 @@
 // When the JSON endpoint is unavailable (bot check, network error, unusual
 // route) we fall back to scraping the rendered DOM of either the current
 // (`shreddit-*` custom elements) or the old (`.thing`) interface.
-const ScrapLLMReddit = (function () {
+var ScrapLLMReddit = typeof ScrapLLMReddit !== 'undefined' ? ScrapLLMReddit : (function () {
   'use strict';
 
   // Paths like /r/sub/comments/<id>/<slug>/, /comments/<id>, /user/x/comments/<id>

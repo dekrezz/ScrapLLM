@@ -6,7 +6,7 @@
 //
 // Pure module: no tabs, no storage, no messaging, no persisted state.
 
-const ScrapLLMSearch = (function() {
+var ScrapLLMSearch = typeof ScrapLLMSearch !== 'undefined' ? ScrapLLMSearch : (function() {
   const HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
   const LITE_ENDPOINT = 'https://lite.duckduckgo.com/lite/';
   const REQUEST_TIMEOUT_MS = 10000;

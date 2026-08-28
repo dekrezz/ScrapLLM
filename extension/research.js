@@ -23,7 +23,7 @@
 // Background context only. Depends on ScrapLLMSearch, ScrapLLMQuietCapture and
 // MultiTabUtils, all resolved at init() time rather than at evaluation time.
 
-const ScrapLLMResearch = (function() {
+var ScrapLLMResearch = typeof ScrapLLMResearch !== 'undefined' ? ScrapLLMResearch : (function() {
   const RESEARCH_CONCURRENCY = 3;
   const PING_INTERVAL_MS = 250;
   const PAGE_LOAD_TIMEOUT_MS = 20000;

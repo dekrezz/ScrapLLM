@@ -19,7 +19,7 @@
 //     money, and counting "$" would reject the honest half of every shopping
 //     query. Money is not a signal here at all; promotional *phrasing* is.
 
-const ScrapLLMSourceQuality = (function() {
+var ScrapLLMSourceQuality = typeof ScrapLLMSourceQuality !== 'undefined' ? ScrapLLMSourceQuality : (function() {
   'use strict';
 
   // A page has to earn this many points to be called junk, and no single

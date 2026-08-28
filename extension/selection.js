@@ -6,7 +6,7 @@
 // That loses the two things that make a pasted fragment usable as LLM context:
 // the source it belongs to, and the fact that a block of code is code (an
 // unfenced snippet gets re-flowed and mangled by every model that reads it).
-const ScrapLLMSelection = (function () {
+var ScrapLLMSelection = typeof ScrapLLMSelection !== 'undefined' ? ScrapLLMSelection : (function () {
   'use strict';
 
   // Elements that mean "this is a code region" regardless of what the text

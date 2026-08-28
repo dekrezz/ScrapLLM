@@ -12,7 +12,7 @@
 // own `/youtubei/v1/next` endpoint for the comments. Both are same-origin from
 // the content script, so no extra host permission is involved, and no request
 // goes anywhere except youtube.com.
-const ScrapLLMYouTube = (function () {
+var ScrapLLMYouTube = typeof ScrapLLMYouTube !== 'undefined' ? ScrapLLMYouTube : (function () {
   'use strict';
 
   const FETCH_TIMEOUT = 10000; // ms

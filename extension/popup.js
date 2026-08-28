@@ -116,6 +116,8 @@ const telegramLimitMenu = document.getElementById("telegramLimitMenu");
 const telegramDateFromInput = document.getElementById("telegramDateFrom");
 const telegramDateToInput = document.getElementById("telegramDateTo");
 const telegramDateClearBtn = document.getElementById("telegramDateClear");
+const aboutVersionEl = document.getElementById("aboutVersion");
+const aboutBuildEl = document.getElementById("aboutBuild");
 const copyChatBtn = document.getElementById("copyChatBtn");
 const chatLimitBtn = document.getElementById("chatLimitBtn");
 const chatLimitMenu = document.getElementById("chatLimitMenu");
@@ -480,7 +482,7 @@ async function initChatAction() {
     const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) return;
 
-    const response = await browserAPI.tabs.sendMessage(tabs[0].id, { action: "getChatInfo" });
+    const response = await askPage(tabs[0].id, { action: "getChatInfo" });
     const info = response && response.success ? response.info : null;
     if (!info || !info.isChat) return;
 
@@ -495,6 +497,65 @@ async function initChatAction() {
     chatPageFallback = true;
   } catch (error) {
     // No content script on this page (store, about:, PDF viewer).
+  }
+}
+
+// Ask the page a question, and if nothing answers, put the content script there
+// and ask again. Two situations look identical from here and both end in
+// silence: no content script at all (the tab predates the extension), and one
+// from an older build that has never heard of this message. Re-injecting fixes
+// both, and is safe because every content-script file guards its own
+// declaration against being evaluated twice.
+async function askPage(tabId, message) {
+  try {
+    const response = await browserAPI.tabs.sendMessage(tabId, message);
+    if (response) return response;
+  } catch (error) {
+    // Falls through to the injection below.
+  }
+  try {
+    const manifest = browserAPI.runtime.getManifest();
+    const entry = (manifest.content_scripts || [])[0];
+    if (!entry || !browserAPI.scripting) return null;
+    await browserAPI.scripting.executeScript({ target: { tabId }, files: entry.js });
+    return await browserAPI.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    return null;
+  }
+}
+
+// The version alone cannot answer "did my reload actually take?" — a rebuilt
+// package usually carries the same version. So the build id is hashed from the
+// files the browser actually loaded: it moves whenever a single byte of the
+// code does, and stays put when nothing did.
+async function computeBuildId() {
+  const manifest = browserAPI.runtime.getManifest();
+  const entry = (manifest.content_scripts || [])[0];
+  const files = (entry && entry.js ? entry.js.slice() : []).concat(['popup.js', 'popup.html', 'styles.css']);
+  const chunks = [];
+  for (const file of files) {
+    try {
+      const response = await fetch(browserAPI.runtime.getURL(file));
+      chunks.push(await response.text());
+    } catch (error) {
+      chunks.push('missing:' + file);
+    }
+  }
+  const bytes = new TextEncoder().encode(chunks.join('|'));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .slice(0, 5)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function initAbout() {
+  try {
+    const manifest = browserAPI.runtime.getManifest();
+    aboutVersionEl.textContent = manifest.version;
+    aboutBuildEl.textContent = await computeBuildId();
+  } catch (error) {
+    aboutBuildEl.textContent = 'unavailable';
   }
 }
 
@@ -541,7 +602,7 @@ async function initTelegramAction() {
     const tabs = await browserAPI.tabs.query({ active: true, currentWindow: true });
     if (!tabs || tabs.length === 0) return;
 
-    const response = await browserAPI.tabs.sendMessage(tabs[0].id, { action: "getTelegramInfo" });
+    const response = await askPage(tabs[0].id, { action: "getTelegramInfo" });
     const info = response && response.success ? response.info : null;
     if (!info || !info.isTelegram) return;
 
@@ -1276,6 +1337,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initSelectionAction();
   initChatAction();
   initTelegramAction();
+  initAbout();
 
   // Detect multi-tab selection (non-blocking, runs in background)
   // UI defaults to single-tab mode, then switches if multiple tabs detected
