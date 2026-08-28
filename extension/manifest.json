@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ScrapLLM - Web to Markdown for AI",
-  "version": "2.2.5",
+  "version": "2.2.6",
   "description": "Webpage to clean Markdown for ChatGPT, Claude & Gemini. Page content stays in your browser; Research asks DuckDuckGo.",
   "author": "dekrezz",
   "icons": {
