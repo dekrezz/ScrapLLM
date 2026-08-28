@@ -5,7 +5,7 @@
 # Usage: ./scripts/build.sh [chrome|firefox|source|all]
 
 # Default values
-VERSION="2.2.3"
+VERSION="2.2.4"
 TARGET="all"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
