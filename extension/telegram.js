@@ -20,7 +20,10 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
 
   const DEFAULT_MAX_MESSAGES = 50;
   const MAX_SCROLL_STEPS = 80;
-  const SCROLL_STEP_DELAY = 300;   // ms; Telegram renders the next page in ~200
+  // Telegram answers a history request in roughly a second; the poll interval
+  // is what decides how soon we notice, the timeout what we are willing to wait.
+  const HISTORY_POLL_INTERVAL = 250;  // ms
+  const HISTORY_LOAD_TIMEOUT = 2500;  // ms
   const IDLE_SCROLL_TOLERANCE = 3;
   const TIME_BUDGET = 60000;       // ms
 
@@ -235,17 +238,63 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
   // linked word arrives as a bare word with its destination gone. So the body
   // goes through Turndown, the converter the rest of the extension already
   // uses, and falls back to plain text only if that throws.
+  // An emoji sits in its own element, so Turndown gives it its own paragraph
+  // and a line that should read "CRAZY TELEGRAM FINAL 📱" arrives as three.
+  // A line holding nothing but emoji is folded back onto the text above it.
+  function tidyEmojiLines(markdown) {
+    const emojiOnly = /^[\p{Extended_Pictographic}\uFE0F\u200D\s]+$/u;
+    const lines = markdown.split('\n');
+    const out = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && emojiOnly.test(trimmed)) {
+        // Attach to the nearest line that has words, dropping the blank the
+        // paragraph break left behind.
+        while (out.length && !out[out.length - 1].trim()) out.pop();
+        if (out.length) {
+          out[out.length - 1] = `${out[out.length - 1].replace(/\s+$/, '')} ${trimmed}`;
+          continue;
+        }
+      }
+      out.push(line);
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function readableMarkdown(root, createTurndown) {
     const copy = strippedClone(root);
     if (!copy) return '';
     if (typeof createTurndown !== 'function') return readableText(root);
     try {
       const markdown = createTurndown().turndown(copy.innerHTML);
-      return String(markdown || '').replace(/\n{3,}/g, '\n\n').trim() || readableText(root);
+      return tidyEmojiLines(String(markdown || '')) || readableText(root);
     } catch (error) {
       logger.error('Telegram markdown conversion failed', error);
       return readableText(root);
     }
+  }
+
+  // Telegram puts each reaction in its own button — an emoji and a count — and
+  // drops the message's own meta block into the same container. Read as one
+  // string that comes out "Eyes11Red Heart1"; read per button it comes out as
+  // the list it looks like on screen.
+  function readReactions(node) {
+    const container = node.querySelector('.Reactions');
+    if (!container) return '';
+    const buttons = container.querySelectorAll('.message-reaction');
+    if (!buttons.length) return '';
+
+    const parts = [];
+    buttons.forEach(button => {
+      const copy = strippedClone(button);
+      const text = copy ? copy.textContent.replace(/\s+/g, ' ').trim() : '';
+      if (!text) return;
+      // The count is glued to the emoji; separating them is what makes the
+      // line readable.
+      const split = /^(.*?)\s*(\d[\d.,]*[KMkm]?)$/.exec(text);
+      parts.push(split ? `${split[1].trim()} ${split[2]}`.trim() : text);
+    });
+    return parts.join(' · ');
   }
 
   function dateForMessage(node, now) {
@@ -330,7 +379,7 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
       edited: /edited|изменено/i.test((node.querySelector('.message-time') || {}).textContent || ''),
       views: exactViews ? exactViews[1].replace(/\s/g, '') : (views ? views.textContent.trim() : ''),
       comments: (node.querySelector('.CommentButton, [class*="CommentButton"]') || {}).textContent || '',
-      reactions: readableText(node.querySelector('.Reactions')),
+      reactions: readReactions(node),
       dateText,
       date
     };
@@ -403,16 +452,32 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
       for (let step = 0; step < MAX_SCROLL_STEPS; step += 1) {
         if (byId.size >= limit) { truncated = true; break; }
         if (Date.now() > deadline) { truncated = true; break; }
-        // Once the oldest rendered message is older than the range, there is
-        // nothing further up worth loading.
         if (reachedBefore && from) break;
-        if (scroller.scrollTop <= 0) break;
 
-        scroller.scrollTop = Math.max(0, scroller.scrollTop - scroller.clientHeight * 0.85);
-        await sleep(SCROLL_STEP_DELAY);
+        // All the way to the top, not a screen at a time. Telegram loads older
+        // history when the list reaches its start, and nowhere before it: a
+        // partial scroll moves the viewport and fetches nothing, which is how a
+        // request for 50 messages kept coming back with the 20 already drawn.
+        // After each load Telegram restores the offset itself, so setting zero
+        // again asks for the next page.
+        const heightBefore = scroller.scrollHeight;
+        scroller.scrollTop = 0;
+
+        // Wait for the fetch, but only as long as it takes: poll for the list
+        // growing rather than sleeping a fixed guess.
+        let grew = false;
+        for (let waited = 0; waited < HISTORY_LOAD_TIMEOUT; waited += HISTORY_POLL_INTERVAL) {
+          await sleep(HISTORY_POLL_INTERVAL);
+          if (scroller.scrollHeight > heightBefore) { grew = true; break; }
+        }
+
         const added = harvest();
-        idlePasses = added === 0 ? idlePasses + 1 : 0;
-        if (idlePasses >= IDLE_SCROLL_TOLERANCE) break;
+        if (!grew && added === 0) {
+          idlePasses += 1;
+          if (idlePasses >= IDLE_SCROLL_TOLERANCE) break;
+        } else {
+          idlePasses = 0;
+        }
       }
       scroller.scrollTop = startScroll;
     }
