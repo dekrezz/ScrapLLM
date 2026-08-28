@@ -53,38 +53,35 @@
                   </svg>
                   <span class="btn-text">Copy Selection</span>
                 </button>
-                <!-- Only rendered on an open Telegram conversation. Its label
-                     names the target, because "Convert & Copy" says nothing
-                     about which of four different documents you would get. -->
-                <div id="telegramAction" class="chat-action telegram-action hidden">
+                <!-- Only rendered on an open Telegram conversation. One
+                     button naming the target, with its two limits laid out
+                     under it: a dropdown hid the date range behind a click and
+                     ran off the bottom of the popup, and there is room to just
+                     show them. -->
+                <div id="telegramAction" class="telegram-action hidden">
                   <button id="copyTelegramBtn" class="primary-btn telegram-btn" type="button" title="Copy this Telegram conversation as Markdown">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="btn-icon">
                       <path d="M21.94 4.3 18.9 19.1c-.23 1.02-.84 1.27-1.7.79l-4.7-3.47-2.27 2.18c-.25.25-.46.46-.94.46l.33-4.78 8.7-7.86c.38-.34-.08-.53-.59-.19l-10.75 6.77-4.63-1.45c-1.01-.31-1.03-1 .21-1.49l18.1-6.98c.84-.31 1.57.19 1.28 1.23Z"/>
                     </svg>
                     <span class="btn-text" id="telegramBtnText">Copy Telegram</span>
                   </button>
-                  <button id="telegramLimitBtn" class="primary-btn telegram-limit" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="telegramLimitMenu" aria-label="How much of the conversation to copy" title="How much of the conversation to copy">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="caret-icon">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </button>
-                  <div id="telegramLimitMenu" class="split-btn-menu telegram-limit-menu hidden" role="menu" aria-labelledby="telegramLimitBtn">
-                    <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="50">Last 50 messages</button>
-                    <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="100">Last 100 messages</button>
-                    <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="200">Last 200 messages</button>
-                    <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="500">Last 500 messages</button>
-                    <button class="split-btn-menu-item" type="button" role="menuitemradio" data-value="all">Everything that loads</button>
-                    <div class="menu-separator" role="separator"></div>
-                    <div class="telegram-date-range">
-                      <label class="telegram-date-row">
-                        <span>From</span>
-                        <input type="date" id="telegramDateFrom" class="telegram-date-input" />
-                      </label>
-                      <label class="telegram-date-row">
-                        <span>To</span>
-                        <input type="date" id="telegramDateTo" class="telegram-date-input" />
-                      </label>
-                      <button id="telegramDateClear" class="split-btn-menu-item telegram-date-clear" type="button">Clear dates</button>
+                  <div class="telegram-options">
+                    <div class="telegram-row">
+                      <span class="telegram-row-label">Messages</span>
+                      <div id="telegramSegments" class="telegram-segmented" role="radiogroup" aria-label="How many messages to copy">
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="50">50</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="100">100</button>
+                        <button class="telegram-segment is-selected" type="button" role="radio" aria-checked="true" data-value="200">200</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="500">500</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="all">All</button>
+                      </div>
+                    </div>
+                    <div class="telegram-row">
+                      <span class="telegram-row-label">Dates</span>
+                      <input type="date" id="telegramDateFrom" class="telegram-date-input" aria-label="Copy messages from this date" />
+                      <span class="telegram-dash" aria-hidden="true">–</span>
+                      <input type="date" id="telegramDateTo" class="telegram-date-input" aria-label="Copy messages up to this date" />
+                      <button id="telegramDateClear" class="telegram-date-clear" type="button" title="Clear both dates" aria-label="Clear both dates">×</button>
                     </div>
                   </div>
                 </div>

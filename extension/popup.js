@@ -111,8 +111,7 @@ const chatAction = document.getElementById("chatAction");
 const telegramAction = document.getElementById("telegramAction");
 const copyTelegramBtn = document.getElementById("copyTelegramBtn");
 const telegramBtnText = document.getElementById("telegramBtnText");
-const telegramLimitBtn = document.getElementById("telegramLimitBtn");
-const telegramLimitMenu = document.getElementById("telegramLimitMenu");
+const telegramSegments = document.getElementById("telegramSegments");
 const telegramDateFromInput = document.getElementById("telegramDateFrom");
 const telegramDateToInput = document.getElementById("telegramDateTo");
 const telegramDateClearBtn = document.getElementById("telegramDateClear");
@@ -563,21 +562,12 @@ let telegramMaxMessagesValue = "200";
 
 function setTelegramLimit(value, options) {
   telegramMaxMessagesValue = String(value);
-  telegramLimitMenu.querySelectorAll(".split-btn-menu-item[data-value]").forEach((item) => {
-    const selected = item.dataset.value === telegramMaxMessagesValue;
-    item.classList.toggle("is-selected", selected);
-    item.setAttribute("aria-checked", selected ? "true" : "false");
+  telegramSegments.querySelectorAll(".telegram-segment").forEach((segment) => {
+    const selected = segment.dataset.value === telegramMaxMessagesValue;
+    segment.classList.toggle("is-selected", selected);
+    segment.setAttribute("aria-checked", selected ? "true" : "false");
   });
   if (!options || options.persist !== false) saveSettings();
-}
-
-function isTelegramMenuOpen() {
-  return !telegramLimitMenu.classList.contains("hidden");
-}
-
-function toggleTelegramMenu(open) {
-  telegramLimitMenu.classList.toggle("hidden", !open);
-  telegramLimitBtn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 // What the button says. "Convert & Copy" is silent about which of four
@@ -1353,32 +1343,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   copySelectionBtn.addEventListener("click", () => convertToMarkdown("selection"));
   copyChatBtn.addEventListener("click", () => convertToMarkdown("chat"));
 
-  copyTelegramBtn.addEventListener("click", () => {
-    toggleTelegramMenu(false);
-    convertToMarkdown();
+  copyTelegramBtn.addEventListener("click", () => convertToMarkdown());
+
+  telegramSegments.querySelectorAll(".telegram-segment").forEach((segment) => {
+    segment.addEventListener("click", () => setTelegramLimit(segment.dataset.value));
   });
 
-  telegramLimitBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleTelegramMenu(!isTelegramMenuOpen());
-  });
-
-  telegramLimitMenu.querySelectorAll(".split-btn-menu-item[data-value]").forEach((item) => {
-    item.addEventListener("click", () => {
-      setTelegramLimit(item.dataset.value);
-      toggleTelegramMenu(false);
-    });
-  });
-
-  // A date bound is a filter, not an action: picking one leaves the menu open
-  // so the other end of the range can be set in the same visit.
   [telegramDateFromInput, telegramDateToInput].forEach((input) => {
     input.addEventListener("change", () => saveSettings());
-    input.addEventListener("click", (e) => e.stopPropagation());
   });
 
-  telegramDateClearBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
+  telegramDateClearBtn.addEventListener("click", () => {
     telegramDateFromInput.value = "";
     telegramDateToInput.value = "";
     saveSettings();
@@ -1425,9 +1400,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("click", (e) => {
     if (isConvertMenuOpen() && !convertSplit.contains(e.target)) {
       closeConvertMenu();
-    }
-    if (isTelegramMenuOpen() && !telegramAction.contains(e.target)) {
-      toggleTelegramMenu(false);
     }
     if (isChatLimitMenuOpen() && !chatAction.contains(e.target)) {
       closeChatLimitMenu();
