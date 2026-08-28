@@ -166,6 +166,12 @@ const githubModeCheckbox = document.getElementById("githubMode");
 const githubIncludeReadmeCheckbox = document.getElementById("githubIncludeReadme");
 const githubIncludeTreeCheckbox = document.getElementById("githubIncludeTree");
 const githubMaxTreeEntriesSelect = document.getElementById("githubMaxTreeEntries");
+const youtubeModeCheckbox = document.getElementById("youtubeMode");
+const youtubeIncludeDescriptionCheckbox = document.getElementById("youtubeIncludeDescription");
+const youtubeIncludeCommentsCheckbox = document.getElementById("youtubeIncludeComments");
+const youtubeMaxCommentsSelect = document.getElementById("youtubeMaxComments");
+const discordModeCheckbox = document.getElementById("discordMode");
+const discordMaxMessagesSelect = document.getElementById("discordMaxMessages");
 
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
@@ -516,6 +522,12 @@ async function loadSettings() {
     githubIncludeReadmeCheckbox.checked = data.githubIncludeReadme !== false;
     githubIncludeTreeCheckbox.checked = data.githubIncludeTree !== false;
     githubMaxTreeEntriesSelect.value = String(data.githubMaxTreeEntries);
+    youtubeModeCheckbox.checked = data.youtubeMode !== false;
+    youtubeIncludeDescriptionCheckbox.checked = data.youtubeIncludeDescription !== false;
+    youtubeIncludeCommentsCheckbox.checked = data.youtubeIncludeComments !== false;
+    youtubeMaxCommentsSelect.value = String(data.youtubeMaxComments);
+    discordModeCheckbox.checked = data.discordMode !== false;
+    discordMaxMessagesSelect.value = String(data.discordMaxMessages);
     setResearchSourceCount(data.researchSourceCount, { persist: false });
     setResearchCapture(data.researchCapture, { persist: false });
     researchJunkFilterCheckbox.checked = data.researchJunkFilter !== false;
@@ -556,6 +568,12 @@ async function saveSettings() {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const youtubeMode = youtubeModeCheckbox.checked;
+    const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
+    const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
+    const youtubeMaxComments = youtubeMaxCommentsSelect.value;
+    const discordMode = discordModeCheckbox.checked;
+    const discordMaxMessages = discordMaxMessagesSelect.value;
     const researchSourceCount = researchSourceCountValue;
     const researchCapture = researchCaptureValue;
     const researchJunkFilter = researchJunkFilterCheckbox.checked;
@@ -583,6 +601,12 @@ async function saveSettings() {
       githubIncludeReadme,
       githubIncludeTree,
       githubMaxTreeEntries,
+      youtubeMode,
+      youtubeIncludeDescription,
+      youtubeIncludeComments,
+      youtubeMaxComments,
+      discordMode,
+      discordMaxMessages,
       researchSourceCount,
       researchCapture,
       researchJunkFilter,
@@ -731,7 +755,12 @@ function getCurrentSettings() {
     githubIncludeReadme: githubIncludeReadmeCheckbox.checked,
     githubIncludeTree: githubIncludeTreeCheckbox.checked,
     githubMaxTreeEntries: githubMaxTreeEntriesSelect.value,
-    researchSourceCount: researchSourceCountValue,
+    youtubeMode: youtubeModeCheckbox.checked,
+    youtubeIncludeDescription: youtubeIncludeDescriptionCheckbox.checked,
+    youtubeIncludeComments: youtubeIncludeCommentsCheckbox.checked,
+    youtubeMaxComments: youtubeMaxCommentsSelect.value,
+    discordMode: discordModeCheckbox.checked,
+    discordMaxMessages: discordMaxMessagesSelect.value,
     researchCapture: researchCaptureValue,
     researchJunkFilter: researchJunkFilterCheckbox.checked,
   };
@@ -859,6 +888,12 @@ async function convertToMarkdown(scopeOverride) {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const youtubeMode = youtubeModeCheckbox.checked;
+    const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
+    const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
+    const youtubeMaxComments = youtubeMaxCommentsSelect.value;
+    const discordMode = discordModeCheckbox.checked;
+    const discordMaxMessages = discordMaxMessagesSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -884,6 +919,12 @@ async function convertToMarkdown(scopeOverride) {
         githubIncludeReadme,
         githubIncludeTree,
         githubMaxTreeEntries,
+        youtubeMode,
+        youtubeIncludeDescription,
+        youtubeIncludeComments,
+        youtubeMaxComments,
+        discordMode,
+        discordMaxMessages,
       },
     });
 
@@ -974,6 +1015,12 @@ async function downloadMarkdown() {
     const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
+    const youtubeMode = youtubeModeCheckbox.checked;
+    const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
+    const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
+    const youtubeMaxComments = youtubeMaxCommentsSelect.value;
+    const discordMode = discordModeCheckbox.checked;
+    const discordMaxMessages = discordMaxMessagesSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -999,6 +1046,12 @@ async function downloadMarkdown() {
         githubIncludeReadme,
         githubIncludeTree,
         githubMaxTreeEntries,
+        youtubeMode,
+        youtubeIncludeDescription,
+        youtubeIncludeComments,
+        youtubeMaxComments,
+        discordMode,
+        discordMaxMessages,
       },
     });
 

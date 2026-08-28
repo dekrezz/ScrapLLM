@@ -502,6 +502,56 @@ Source: [{title}]({url})</textarea>
             </div>
 
             <div class="setting-group">
+              <h3>YouTube</h3>
+              <label class="setting-option">
+                <input type="checkbox" id="youtubeMode" />
+                <span>YouTube mode (description + comments)</span>
+              </label>
+              <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
+                On a video page, copies the title, channel and facts, the description in full — not the two lines the page shows — and the comment thread, which is not in the page at all until you scroll to it.
+              </small>
+              <label class="setting-option" style="margin-top: 8px;">
+                <input type="checkbox" id="youtubeIncludeDescription" />
+                <span>Include the description</span>
+              </label>
+              <label class="setting-option">
+                <input type="checkbox" id="youtubeIncludeComments" />
+                <span>Include comments</span>
+              </label>
+              <label class="setting-option">
+                <span>Max comments:</span>
+                <select id="youtubeMaxComments" class="token-limit-select">
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="250">250</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="setting-group">
+              <h3>Discord</h3>
+              <label class="setting-option">
+                <input type="checkbox" id="discordMode" />
+                <span>Discord mode (channel transcript)</span>
+              </label>
+              <small style="display: block; margin-top: 4px; color: var(--text-secondary);">
+                Copies the open channel as a transcript with authors, timestamps and reply context, scrolling the message list for history. Read from the page rather than Discord's API, which would need your account token.
+              </small>
+              <label class="setting-option" style="margin-top: 8px;">
+                <span>Max messages:</span>
+                <select id="discordMaxMessages" class="token-limit-select">
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="500">500</option>
+                  <option value="all">All loaded</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="setting-group">
               <h3>X (Twitter)</h3>
               <label class="setting-option">
                 <input type="checkbox" id="xMode" />

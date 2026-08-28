@@ -60,6 +60,8 @@
         "chat.js",
         "reddit.js",
         "github.js",
+        "discord.js",
+        "youtube.js",
         "x.js",
         "content.js"
       ]

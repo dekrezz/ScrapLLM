@@ -638,6 +638,56 @@
       }
     }
 
+    // YouTube video pages: the description on screen is clamped to two lines
+    // behind "...more", and the comments are not in the document at all until
+    // the user scrolls to them. Both are read where the page reads them.
+    if (settings.youtubeMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof ScrapLLMYouTube !== 'undefined' &&
+        ScrapLLMYouTube.isYouTubePage(window.location)) {
+      DebugLog.log('YouTube video page detected');
+      try {
+        const youtube = await ScrapLLMYouTube.convert(settings, {
+          logger: {
+            log: (message, data) => DebugLog.log(message, data),
+            error: (message, error) => DebugLog.error(message, error)
+          }
+        });
+        if (youtube) {
+          return ScrapLLMConvert.postProcessMarkdown(
+            youtube.markdown, settings, youtube.articleData, pageContext());
+        }
+        DebugLog.log('YouTube extractor returned no content; using generic extraction');
+      } catch (error) {
+        DebugLog.error('YouTube extractor failed; using generic extraction', error);
+      }
+    }
+
+    // Discord channels: the message list is virtualised, so Readability sees
+    // whatever handful of messages happens to be painted. The extractor scrolls
+    // the list itself for history.
+    if (settings.discordMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof ScrapLLMDiscord !== 'undefined' &&
+        ScrapLLMDiscord.isDiscordPage(window.location)) {
+      DebugLog.log('Discord channel detected');
+      try {
+        const discord = await ScrapLLMDiscord.convert(settings, {
+          logger: {
+            log: (message, data) => DebugLog.log(message, data),
+            error: (message, error) => DebugLog.error(message, error)
+          }
+        });
+        if (discord) {
+          return ScrapLLMConvert.postProcessMarkdown(
+            discord.markdown, settings, discord.articleData, pageContext());
+        }
+        DebugLog.log('Discord extractor found no messages; using generic extraction');
+      } catch (error) {
+        DebugLog.error('Discord extractor failed; using generic extraction', error);
+      }
+    }
+
     // X (Twitter) pages: the timeline is virtualised and Readability keeps at
     // most the first visible post, so threads and timelines go through the
     // dedicated X extractor instead.

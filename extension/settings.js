@@ -44,6 +44,21 @@ const SettingsUtils = (function() {
       // Ceiling on tree entries; 'all' means no cap. A monorepo can hold six
       // figures of paths, which is not a thing to paste into a model.
       githubMaxTreeEntries: 1000,
+      // YouTube-aware extraction: title, channel, the full description and the
+      // comment thread. The page shows the description clamped to two lines and
+      // has no comments in the document until you scroll to them.
+      youtubeMode: true,
+      youtubeIncludeDescription: true,
+      youtubeIncludeComments: true,
+      // Comment ceiling; 'all' means no cap. YouTube pages them 20 at a time.
+      youtubeMaxComments: 100,
+      // Discord-aware extraction: the open channel as a transcript, read from
+      // the rendered list. Deliberately not the API — that needs the account
+      // token, which Discord bans for.
+      discordMode: true,
+      // Message ceiling, counted from the newest; 'all' means whatever
+      // scrolling reaches inside the time budget.
+      discordMaxMessages: 200,
       // X-aware extraction: renders the thread (post + replies) or the timeline
       // by walking the virtualised list instead of the first visible post only.
       xMode: true,
