@@ -77,10 +77,25 @@
                       </div>
                     </div>
                     <div class="telegram-row">
-                      <span class="telegram-row-label">Dates</span>
-                      <input type="date" id="telegramDateFrom" class="telegram-date-input" aria-label="Copy messages from this date" />
+                      <span class="telegram-row-label">Period</span>
+                      <div id="telegramPeriods" class="telegram-segmented" role="radiogroup" aria-label="How far back to copy">
+                        <button class="telegram-segment is-selected" type="button" role="radio" aria-checked="true" data-period="all">All</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-period="1">Today</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-period="7">7d</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-period="30">30d</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-period="custom">Dates</button>
+                      </div>
+                    </div>
+                    <!-- Plain text, not <input type="date">: the native picker
+                         opens a window the popup cannot contain, so it spills
+                         off the edge and drags a system widget in with it. -->
+                    <div class="telegram-row telegram-custom-dates hidden" id="telegramCustomDates">
+                      <span class="telegram-row-label"></span>
+                      <input type="text" id="telegramDateFrom" class="telegram-date-input" inputmode="numeric"
+                             placeholder="YYYY-MM-DD" maxlength="10" aria-label="Copy messages from this date" />
                       <span class="telegram-dash" aria-hidden="true">–</span>
-                      <input type="date" id="telegramDateTo" class="telegram-date-input" aria-label="Copy messages up to this date" />
+                      <input type="text" id="telegramDateTo" class="telegram-date-input" inputmode="numeric"
+                             placeholder="YYYY-MM-DD" maxlength="10" aria-label="Copy messages up to this date" />
                       <button id="telegramDateClear" class="telegram-date-clear" type="button" title="Clear both dates" aria-label="Clear both dates">×</button>
                     </div>
                   </div>

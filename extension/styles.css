@@ -2233,3 +2233,13 @@ input[type="checkbox"] {
   color: var(--label-primary);
   user-select: text;
 }
+
+/* The custom-date row only appears when "Dates" is chosen, so the common case
+   costs no height at all. */
+.telegram-custom-dates.hidden {
+  display: none !important;
+}
+
+.telegram-date-input::placeholder {
+  color: var(--label-tertiary);
+}

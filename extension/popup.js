@@ -112,6 +112,8 @@ const telegramAction = document.getElementById("telegramAction");
 const copyTelegramBtn = document.getElementById("copyTelegramBtn");
 const telegramBtnText = document.getElementById("telegramBtnText");
 const telegramSegments = document.getElementById("telegramSegments");
+const telegramPeriods = document.getElementById("telegramPeriods");
+const telegramCustomDates = document.getElementById("telegramCustomDates");
 const telegramDateFromInput = document.getElementById("telegramDateFrom");
 const telegramDateToInput = document.getElementById("telegramDateTo");
 const telegramDateClearBtn = document.getElementById("telegramDateClear");
@@ -319,7 +321,7 @@ function initNavGestures() {
 }
 
 // Theme management
-function setTheme(theme) {
+function setTheme(theme, options) {
   const isDark = theme === THEMES.DARK;
   bodyTag.classList.toggle("dark-theme", isDark);
   bodyTag.classList.toggle("light-theme", !isDark);
@@ -328,15 +330,31 @@ function setTheme(theme) {
   lightThemeBtn.classList.toggle("active", !isDark);
   darkThemeBtn.classList.toggle("active", isDark);
 
-  localStorage.setItem(THEME_KEY, theme);
+  // Following the system is a state of its own, not a third theme: the class
+  // says which one is showing, storage says whether the user ever chose. Saving
+  // on a system-driven change would silently pin the theme at whatever the OS
+  // happened to be the first time the popup opened.
+  if (!options || options.remember !== false) localStorage.setItem(THEME_KEY, theme);
 }
 
 function initTheme() {
   const userThemePreference = localStorage.getItem(THEME_KEY);
   if (userThemePreference === THEMES.DARK || userThemePreference === THEMES.LIGHT) {
     setTheme(userThemePreference);
-  } else {
-    setTheme(THEMES.LIGHT);
+    return;
+  }
+
+  // Nobody has chosen, so follow the browser. Defaulting to light meant a
+  // white popup opening over a dark browser, every time.
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const apply = () => setTheme(query.matches ? THEMES.DARK : THEMES.LIGHT, { remember: false });
+  apply();
+
+  // Keep following it while the popup is open — the OS can flip at sunset.
+  if (typeof query.addEventListener === "function") {
+    query.addEventListener("change", () => {
+      if (!localStorage.getItem(THEME_KEY)) apply();
+    });
   }
 }
 
@@ -548,6 +566,50 @@ async function computeBuildId() {
     .join('');
 }
 
+// A period is a shorthand for the from/to pair the extractor actually takes:
+// "7d" is simply today minus six days, resolved here so the extractor keeps one
+// way of being told what to include.
+function localDateString(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function setTelegramPeriod(period, options) {
+  telegramPeriods.querySelectorAll(".telegram-segment").forEach((segment) => {
+    const selected = segment.dataset.period === period;
+    segment.classList.toggle("is-selected", selected);
+    segment.setAttribute("aria-checked", selected ? "true" : "false");
+  });
+  telegramCustomDates.classList.toggle("hidden", period !== "custom");
+
+  if (period === "all") {
+    telegramDateFromInput.value = "";
+    telegramDateToInput.value = "";
+  } else if (period !== "custom") {
+    const days = Number(period);
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - (days - 1));
+    telegramDateFromInput.value = localDateString(from);
+    telegramDateToInput.value = "";
+  }
+  if (!options || options.persist !== false) saveSettings();
+}
+
+// Which segment matches the stored pair, so reopening the popup shows the
+// period the user actually left it on.
+function periodFromDates(from, to) {
+  if (!from && !to) return "all";
+  if (to) return "custom";
+  for (const days of [1, 7, 30]) {
+    const candidate = new Date();
+    candidate.setHours(0, 0, 0, 0);
+    candidate.setDate(candidate.getDate() - (days - 1));
+    if (localDateString(candidate) === from) return String(days);
+  }
+  return "custom";
+}
+
 async function initAbout() {
   try {
     const manifest = browserAPI.runtime.getManifest();
@@ -641,6 +703,7 @@ async function loadSettings() {
     setTelegramLimit(String(data.telegramMaxMessages ?? "200"), { persist: false });
     telegramDateFromInput.value = data.telegramDateFrom || "";
     telegramDateToInput.value = data.telegramDateTo || "";
+    setTelegramPeriod(periodFromDates(telegramDateFromInput.value, telegramDateToInput.value), { persist: false });
     youtubeModeCheckbox.checked = data.youtubeMode !== false;
     youtubeIncludeDescriptionCheckbox.checked = data.youtubeIncludeDescription !== false;
     youtubeIncludeCommentsCheckbox.checked = data.youtubeIncludeComments !== false;
@@ -1347,6 +1410,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   telegramSegments.querySelectorAll(".telegram-segment").forEach((segment) => {
     segment.addEventListener("click", () => setTelegramLimit(segment.dataset.value));
+  });
+
+  telegramPeriods.querySelectorAll(".telegram-segment").forEach((segment) => {
+    segment.addEventListener("click", () => setTelegramPeriod(segment.dataset.period));
   });
 
   [telegramDateFromInput, telegramDateToInput].forEach((input) => {
