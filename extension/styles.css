@@ -588,14 +588,16 @@ a.icon-btn {
 
 /* Black, so a transcript copy never reads as "the same as Convert & Copy".
    Same key shape, different material. */
-.chat-action {
+.chat-action,
+.telegram-action {
   position: relative;
   display: flex;
   gap: 0;
   border-radius: var(--r-pill);
 }
 
-.chat-action.hidden {
+.chat-action.hidden,
+.telegram-action.hidden {
   display: none !important;
 }
 
@@ -627,7 +629,8 @@ a.icon-btn {
    caret does — it changes what the button copies, not what it means. */
 /* Caret-only segment: the current count lives in the menu's checkmark, not on
    the button, so the key stays narrow next to its action. */
-.chat-limit {
+.chat-limit,
+.telegram-limit {
   width: 2.875rem;
   min-width: 2.875rem;
   margin-left: 2px;
@@ -658,7 +661,8 @@ a.icon-btn {
 
 /* The menu drops below its trigger — the action sits at the top of the stack,
    so opening upward would run into the header. */
-.split-btn-menu.chat-limit-menu {
+.split-btn-menu.chat-limit-menu,
+.split-btn-menu.telegram-limit-menu {
   top: calc(100% + 0.375rem);
   bottom: auto;
   transform-origin: top right;
@@ -2102,8 +2106,19 @@ input[type="checkbox"] {
   color: #fff;
 }
 
-/* A long chat name cannot be allowed to grow the popup or wrap the button. */
+.primary-btn.telegram-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.primary-btn.telegram-limit {
+  flex: 0 0 auto;
+}
+
+/* A long chat name cannot be allowed to grow the popup or wrap the button, but
+   it should use every pixel the arrow does not need before it elides. */
 .telegram-btn .btn-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
