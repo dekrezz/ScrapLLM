@@ -58,7 +58,7 @@ const SettingsUtils = (function() {
       telegramMode: true,
       // Ceiling counted from the newest message; 'all' means whatever
       // scrolling reaches inside the time budget.
-      telegramMaxMessages: 200,
+      telegramMaxMessages: 50,
       // Optional YYYY-MM-DD bounds. Empty means unbounded on that side.
       telegramDateFrom: '',
       telegramDateTo: '',

@@ -18,7 +18,7 @@
 var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegram : (function () {
   'use strict';
 
-  const DEFAULT_MAX_MESSAGES = 200;
+  const DEFAULT_MAX_MESSAGES = 50;
   const MAX_SCROLL_STEPS = 80;
   const SCROLL_STEP_DELAY = 300;   // ms; Telegram renders the next page in ~200
   const IDLE_SCROLL_TOLERANCE = 3;
@@ -179,7 +179,21 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
       .filter(node => !node.classList.contains('SponsoredMessage'));
   }
 
+  // The list element is not always the thing that scrolls — which build wraps
+  // it, and in what, changes. Asking a real message for its nearest scrollable
+  // ancestor finds the right container whatever the wrapping is; without it the
+  // run stopped at whatever was already painted, which is how a request for 50
+  // messages came back with 20.
   function scrollerElement() {
+    const first = messageNodes()[0];
+    let current = first ? first.parentElement : null;
+    while (current) {
+      const style = getComputedStyle(current);
+      if (/(auto|scroll)/.test(style.overflowY) && current.scrollHeight > current.clientHeight + 20) {
+        return current;
+      }
+      current = current.parentElement;
+    }
     return document.querySelector('.MessageList.custom-scroll') ||
            document.querySelector('.MessageList');
   }
@@ -192,6 +206,21 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
     const copy = root.cloneNode(true);
     copy.querySelectorAll('[data-ignore-on-paste], .MessageMeta, .Reactions, .message-action-buttons-container')
       .forEach(node => node.remove());
+
+    // Telegram draws every emoji as a pair of images: a transparent spacer
+    // carrying the character in its alt text, and an animated blob layered over
+    // it. Converted literally that becomes
+    // `![📱](…/blank.png)![](blob:…)` — two dead links where a character
+    // belongs. The alt is the emoji, so it replaces the pair.
+    copy.querySelectorAll('img').forEach(image => {
+      const alt = image.getAttribute('alt');
+      if (alt) {
+        image.replaceWith(copy.ownerDocument.createTextNode(alt));
+      } else {
+        // No alt: a blob overlay, or a spacer. Neither survives the copy.
+        image.remove();
+      }
+    });
     return copy;
   }
 
@@ -242,13 +271,33 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
     return kinds.length ? `[${kinds.join(', ')}]` : '';
   }
 
+  // The container holds the words "Forwarded from" and, when there is one, the
+  // source's name. Taking it whole produced "forwarded from Forwarded from";
+  // the label is stripped so what is left is the name, and an empty result
+  // means the source is hidden — in which case the message says nothing rather
+  // than saying it twice.
+  // Telegram puts the edit marker inside the time element, so reading it whole
+  // yields "edited 20:17" and the transcript says the message was sent at
+  // "edited 20:17". The marker is reported separately instead.
+  function readTime(node) {
+    const raw = (node.querySelector('.message-time') || {}).textContent || '';
+    return raw.replace(/\b(edited|изменено)\b/gi, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function readForwardSource(element) {
+    if (!element) return '';
+    const text = element.textContent.replace(/\s+/g, ' ').trim();
+    const name = text.replace(/^(forwarded from|переслано от|переслано из)\s*:?\s*/i, '').trim();
+    return name === text && /^forwarded from$/i.test(text) ? '' : name;
+  }
+
   function readMessage(node, kind, chatName, now, createTurndown) {
     const own = node.classList.contains('own');
     const senderEl = node.querySelector('.message-title-name, .sender-title');
     // The forward container is always present and usually empty; only its text
     // means the message was actually forwarded.
     const forwardEl = node.querySelector('.forward-title-container');
-    const forwarded = forwardEl ? forwardEl.textContent.trim() : '';
+    const forwarded = readForwardSource(forwardEl);
 
     const embedded = node.querySelector('.EmbeddedMessage');
     const reply = embedded
@@ -274,7 +323,11 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
       reply,
       text: readableMarkdown(node.querySelector('.text-content'), createTurndown),
       media: describeMedia(node),
-      time: (node.querySelector('.message-time') || {}).textContent || '',
+      time: readTime(node),
+      // Read off the time element, not the whole meta block: there the marker
+      // runs straight into the view count ("3.2Kedited"), where a word
+      // boundary never matches.
+      edited: /edited|изменено/i.test((node.querySelector('.message-time') || {}).textContent || ''),
       views: exactViews ? exactViews[1].replace(/\s/g, '') : (views ? views.textContent.trim() : ''),
       comments: (node.querySelector('.CommentButton, [class*="CommentButton"]') || {}).textContent || '',
       reactions: readableText(node.querySelector('.Reactions')),
@@ -404,6 +457,7 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
       author,
       message.dateText && message.time ? `${message.dateText} ${message.time}` : message.time,
       message.views ? `${message.views} views` : '',
+      message.edited ? 'edited' : '',
       message.forwarded && info.kind !== 'channel' ? `forwarded from ${message.forwarded}` : '',
       message.comments ? message.comments.trim() : ''
     ]);
@@ -459,6 +513,10 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
     }
 
     const notes = [];
+    const ceiling = resolveMaxMessages(options);
+    if (!truncated && Number.isFinite(ceiling) && messages.length < ceiling) {
+      notes.push(`Loading reached ${messages.length} of the ${ceiling} asked for; the conversation has no more history above this point, or it stopped loading.`);
+    }
     if (truncated) {
       notes.push(`Only the most recent ${messages.length} messages were included (limit set in ScrapLLM).`);
     }

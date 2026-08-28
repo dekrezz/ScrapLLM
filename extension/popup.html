@@ -69,11 +69,11 @@
                     <div class="telegram-row">
                       <span class="telegram-row-label">Messages</span>
                       <div id="telegramSegments" class="telegram-segmented" role="radiogroup" aria-label="How many messages to copy">
-                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="50">50</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="10">10</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="25">25</button>
+                        <button class="telegram-segment is-selected" type="button" role="radio" aria-checked="true" data-value="50">50</button>
                         <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="100">100</button>
-                        <button class="telegram-segment is-selected" type="button" role="radio" aria-checked="true" data-value="200">200</button>
-                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="500">500</button>
-                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="all">All</button>
+                        <button class="telegram-segment" type="button" role="radio" aria-checked="false" data-value="250">250</button>
                       </div>
                     </div>
                     <div class="telegram-row">
@@ -92,10 +92,10 @@
                     <div class="telegram-row telegram-custom-dates hidden" id="telegramCustomDates">
                       <span class="telegram-row-label"></span>
                       <input type="text" id="telegramDateFrom" class="telegram-date-input" inputmode="numeric"
-                             placeholder="YYYY-MM-DD" maxlength="10" aria-label="Copy messages from this date" />
+                             placeholder="DD.MM" maxlength="5" aria-label="Copy messages from this day and month" />
                       <span class="telegram-dash" aria-hidden="true">–</span>
                       <input type="text" id="telegramDateTo" class="telegram-date-input" inputmode="numeric"
-                             placeholder="YYYY-MM-DD" maxlength="10" aria-label="Copy messages up to this date" />
+                             placeholder="DD.MM" maxlength="5" aria-label="Copy messages up to this day and month" />
                       <button id="telegramDateClear" class="telegram-date-clear" type="button" title="Clear both dates" aria-label="Clear both dates">×</button>
                     </div>
                   </div>

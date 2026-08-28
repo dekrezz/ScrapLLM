@@ -569,6 +569,28 @@ async function computeBuildId() {
 // A period is a shorthand for the from/to pair the extractor actually takes:
 // "7d" is simply today minus six days, resolved here so the extractor keeps one
 // way of being told what to include.
+// The year is noise in a chat you are reading now, so the field takes "DD.MM"
+// and the year is inferred: this year, unless that would put the date in the
+// future, in which case it is last year. Storage keeps the full date, because
+// that is what the extractor compares against.
+function displayFromStored(stored) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(stored || '').trim());
+  return parts ? `${parts[3]}.${parts[2]}` : '';
+}
+
+function storedFromDisplay(display) {
+  const parts = /^(\d{1,2})[.\/-](\d{1,2})$/.exec(String(display || '').trim());
+  if (!parts) return '';
+  const day = Number(parts[1]);
+  const month = Number(parts[2]);
+  if (day < 1 || day > 31 || month < 1 || month > 12) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let candidate = new Date(today.getFullYear(), month - 1, day);
+  if (candidate > today) candidate = new Date(today.getFullYear() - 1, month - 1, day);
+  return localDateString(candidate);
+}
+
 function localDateString(date) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -590,7 +612,7 @@ function setTelegramPeriod(period, options) {
     const from = new Date();
     from.setHours(0, 0, 0, 0);
     from.setDate(from.getDate() - (days - 1));
-    telegramDateFromInput.value = localDateString(from);
+    telegramDateFromInput.value = displayFromStored(localDateString(from));
     telegramDateToInput.value = "";
   }
   if (!options || options.persist !== false) saveSettings();
@@ -599,6 +621,7 @@ function setTelegramPeriod(period, options) {
 // Which segment matches the stored pair, so reopening the popup shows the
 // period the user actually left it on.
 function periodFromDates(from, to) {
+  // `from` and `to` here are stored values, not what the fields show.
   if (!from && !to) return "all";
   if (to) return "custom";
   for (const days of [1, 7, 30]) {
@@ -623,7 +646,11 @@ async function initAbout() {
 let telegramMaxMessagesValue = "200";
 
 function setTelegramLimit(value, options) {
-  telegramMaxMessagesValue = String(value);
+  const offered = Array.from(telegramSegments.querySelectorAll(".telegram-segment"))
+    .map((segment) => segment.dataset.value);
+  // A value saved before the steps changed — "all", say — would leave every
+  // segment unselected and the copy running on a number nothing shows.
+  telegramMaxMessagesValue = offered.includes(String(value)) ? String(value) : "50";
   telegramSegments.querySelectorAll(".telegram-segment").forEach((segment) => {
     const selected = segment.dataset.value === telegramMaxMessagesValue;
     segment.classList.toggle("is-selected", selected);
@@ -701,9 +728,9 @@ async function loadSettings() {
     githubIncludeTreeCheckbox.checked = data.githubIncludeTree !== false;
     githubMaxTreeEntriesSelect.value = String(data.githubMaxTreeEntries);
     setTelegramLimit(String(data.telegramMaxMessages ?? "200"), { persist: false });
-    telegramDateFromInput.value = data.telegramDateFrom || "";
-    telegramDateToInput.value = data.telegramDateTo || "";
-    setTelegramPeriod(periodFromDates(telegramDateFromInput.value, telegramDateToInput.value), { persist: false });
+    telegramDateFromInput.value = displayFromStored(data.telegramDateFrom);
+    telegramDateToInput.value = displayFromStored(data.telegramDateTo);
+    setTelegramPeriod(periodFromDates(data.telegramDateFrom || "", data.telegramDateTo || ""), { persist: false });
     youtubeModeCheckbox.checked = data.youtubeMode !== false;
     youtubeIncludeDescriptionCheckbox.checked = data.youtubeIncludeDescription !== false;
     youtubeIncludeCommentsCheckbox.checked = data.youtubeIncludeComments !== false;
@@ -751,8 +778,8 @@ async function saveSettings() {
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
     const telegramMaxMessages = telegramMaxMessagesValue;
-    const telegramDateFrom = telegramDateFromInput.value;
-    const telegramDateTo = telegramDateToInput.value;
+    const telegramDateFrom = storedFromDisplay(telegramDateFromInput.value);
+    const telegramDateTo = storedFromDisplay(telegramDateToInput.value);
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
@@ -944,8 +971,8 @@ function getCurrentSettings() {
     githubIncludeTree: githubIncludeTreeCheckbox.checked,
     githubMaxTreeEntries: githubMaxTreeEntriesSelect.value,
     telegramMaxMessages: telegramMaxMessagesValue,
-    telegramDateFrom: telegramDateFromInput.value,
-    telegramDateTo: telegramDateToInput.value,
+    telegramDateFrom: storedFromDisplay(telegramDateFromInput.value),
+    telegramDateTo: storedFromDisplay(telegramDateToInput.value),
     youtubeMode: youtubeModeCheckbox.checked,
     youtubeIncludeDescription: youtubeIncludeDescriptionCheckbox.checked,
     youtubeIncludeComments: youtubeIncludeCommentsCheckbox.checked,
@@ -1080,8 +1107,8 @@ async function convertToMarkdown(scopeOverride) {
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
     const telegramMaxMessages = telegramMaxMessagesValue;
-    const telegramDateFrom = telegramDateFromInput.value;
-    const telegramDateTo = telegramDateToInput.value;
+    const telegramDateFrom = storedFromDisplay(telegramDateFromInput.value);
+    const telegramDateTo = storedFromDisplay(telegramDateToInput.value);
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
@@ -1213,8 +1240,8 @@ async function downloadMarkdown() {
     const githubIncludeTree = githubIncludeTreeCheckbox.checked;
     const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
     const telegramMaxMessages = telegramMaxMessagesValue;
-    const telegramDateFrom = telegramDateFromInput.value;
-    const telegramDateTo = telegramDateToInput.value;
+    const telegramDateFrom = storedFromDisplay(telegramDateFromInput.value);
+    const telegramDateTo = storedFromDisplay(telegramDateToInput.value);
     const youtubeMode = youtubeModeCheckbox.checked;
     const youtubeIncludeDescription = youtubeIncludeDescriptionCheckbox.checked;
     const youtubeIncludeComments = youtubeIncludeCommentsCheckbox.checked;
