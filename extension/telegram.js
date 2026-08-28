@@ -246,7 +246,12 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
     const lines = markdown.split('\n');
     const out = [];
     for (const line of lines) {
-      const trimmed = line.trim();
+      // Turndown ends a soft-wrapped line with two spaces, and Telegram's own
+      // spacing leaves lines holding nothing but blanks. Both are invisible on
+      // screen and pure noise in a file, so a line is either text or empty.
+      const cleaned = line.replace(/\s+$/, '');
+      const trimmed = cleaned.trim();
+
       if (trimmed && emojiOnly.test(trimmed)) {
         // Attach to the nearest line that has words, dropping the blank the
         // paragraph break left behind.
@@ -256,7 +261,9 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
           continue;
         }
       }
-      out.push(line);
+      // A line orphaned by that fold starts with the space that used to follow
+      // the emoji.
+      out.push(cleaned === trimmed ? cleaned : (/^\s{1,2}\S/.test(cleaned) ? trimmed : cleaned));
     }
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
@@ -616,6 +623,7 @@ var ScrapLLMTelegram = typeof ScrapLLMTelegram !== 'undefined' ? ScrapLLMTelegra
     // Exposed for tests
     _internals: {
       parseSeparatorDate,
+      tidyEmojiLines,
       parseHash,
       readableText,
       readMessage,
