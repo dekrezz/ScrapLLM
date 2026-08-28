@@ -59,6 +59,7 @@
         "selection.js",
         "chat.js",
         "reddit.js",
+        "github.js",
         "x.js",
         "content.js"
       ]

@@ -162,6 +162,10 @@ const redditMaxCommentsSelect = document.getElementById("redditMaxComments");
 const xModeCheckbox = document.getElementById("xMode");
 const xIncludeRepliesCheckbox = document.getElementById("xIncludeReplies");
 const xMaxPostsSelect = document.getElementById("xMaxPosts");
+const githubModeCheckbox = document.getElementById("githubMode");
+const githubIncludeReadmeCheckbox = document.getElementById("githubIncludeReadme");
+const githubIncludeTreeCheckbox = document.getElementById("githubIncludeTree");
+const githubMaxTreeEntriesSelect = document.getElementById("githubMaxTreeEntries");
 
 // Token Counter DOM elements
 const tokenCounter = document.getElementById("tokenCounter");
@@ -508,6 +512,10 @@ async function loadSettings() {
     xModeCheckbox.checked = data.xMode !== false;
     xIncludeRepliesCheckbox.checked = data.xIncludeReplies !== false;
     xMaxPostsSelect.value = String(data.xMaxPosts);
+    githubModeCheckbox.checked = data.githubMode !== false;
+    githubIncludeReadmeCheckbox.checked = data.githubIncludeReadme !== false;
+    githubIncludeTreeCheckbox.checked = data.githubIncludeTree !== false;
+    githubMaxTreeEntriesSelect.value = String(data.githubMaxTreeEntries);
     setResearchSourceCount(data.researchSourceCount, { persist: false });
     setResearchCapture(data.researchCapture, { persist: false });
     researchJunkFilterCheckbox.checked = data.researchJunkFilter !== false;
@@ -544,6 +552,10 @@ async function saveSettings() {
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
+    const githubMode = githubModeCheckbox.checked;
+    const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
+    const githubIncludeTree = githubIncludeTreeCheckbox.checked;
+    const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
     const researchSourceCount = researchSourceCountValue;
     const researchCapture = researchCaptureValue;
     const researchJunkFilter = researchJunkFilterCheckbox.checked;
@@ -567,6 +579,10 @@ async function saveSettings() {
       xMode,
       xIncludeReplies,
       xMaxPosts,
+      githubMode,
+      githubIncludeReadme,
+      githubIncludeTree,
+      githubMaxTreeEntries,
       researchSourceCount,
       researchCapture,
       researchJunkFilter,
@@ -711,6 +727,10 @@ function getCurrentSettings() {
     xMode: xModeCheckbox.checked,
     xIncludeReplies: xIncludeRepliesCheckbox.checked,
     xMaxPosts: xMaxPostsSelect.value,
+    githubMode: githubModeCheckbox.checked,
+    githubIncludeReadme: githubIncludeReadmeCheckbox.checked,
+    githubIncludeTree: githubIncludeTreeCheckbox.checked,
+    githubMaxTreeEntries: githubMaxTreeEntriesSelect.value,
     researchSourceCount: researchSourceCountValue,
     researchCapture: researchCaptureValue,
     researchJunkFilter: researchJunkFilterCheckbox.checked,
@@ -835,6 +855,10 @@ async function convertToMarkdown(scopeOverride) {
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
+    const githubMode = githubModeCheckbox.checked;
+    const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
+    const githubIncludeTree = githubIncludeTreeCheckbox.checked;
+    const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -856,6 +880,10 @@ async function convertToMarkdown(scopeOverride) {
         xMode,
         xIncludeReplies,
         xMaxPosts,
+        githubMode,
+        githubIncludeReadme,
+        githubIncludeTree,
+        githubMaxTreeEntries,
       },
     });
 
@@ -942,6 +970,10 @@ async function downloadMarkdown() {
     const xMode = xModeCheckbox.checked;
     const xIncludeReplies = xIncludeRepliesCheckbox.checked;
     const xMaxPosts = xMaxPostsSelect.value;
+    const githubMode = githubModeCheckbox.checked;
+    const githubIncludeReadme = githubIncludeReadmeCheckbox.checked;
+    const githubIncludeTree = githubIncludeTreeCheckbox.checked;
+    const githubMaxTreeEntries = githubMaxTreeEntriesSelect.value;
 
     // Send message to content script
     const response = await browserAPI.tabs.sendMessage(tabs[0].id, {
@@ -963,6 +995,10 @@ async function downloadMarkdown() {
         xMode,
         xIncludeReplies,
         xMaxPosts,
+        githubMode,
+        githubIncludeReadme,
+        githubIncludeTree,
+        githubMaxTreeEntries,
       },
     });
 

@@ -577,7 +577,8 @@
       includeLinks: settings.includeLinks,
       triggerLazyLoading: settings.triggerLazyLoading === true,
       redditMode: settings.redditMode !== false,
-      xMode: settings.xMode !== false
+      xMode: settings.xMode !== false,
+      githubMode: settings.githubMode !== false
     });
 
     // Reddit pages: Readability keeps the post body but drops the comment tree
@@ -606,6 +607,35 @@
       // (empty feed, profile with no activity); fall through to the generic
       // extraction below.
       DebugLog.log('Reddit extractor returned no content; using generic extraction');
+    }
+
+    // GitHub repository pages: what is on screen is a compiled copy of what we
+    // actually want. The README is HTML built from Markdown, so converting it
+    // back is a lossy round trip, and the file list is one directory deep. The
+    // API has the original Markdown and the whole tree.
+    if (settings.githubMode !== false &&
+        settings.contentScope !== 'selection' &&
+        typeof ScrapLLMGitHub !== 'undefined' &&
+        ScrapLLMGitHub.isGitHubPage(window.location)) {
+      DebugLog.log('GitHub repository page detected');
+      try {
+        const github = await ScrapLLMGitHub.convert(settings, {
+          logger: {
+            log: (message, data) => DebugLog.log(message, data),
+            error: (message, error) => DebugLog.error(message, error)
+          }
+        });
+        if (github) {
+          // The GitHub renderer emits its own H1, so includeTitle is
+          // intentionally not applied a second time here.
+          return ScrapLLMConvert.postProcessMarkdown(
+            github.markdown, settings, github.articleData, pageContext());
+        }
+      } catch (error) {
+        // A private repo, a spent rate limit or an offline API is a reason to
+        // fall back to the page in front of the user, not to fail the copy.
+        DebugLog.error('GitHub extractor failed; using generic extraction', error);
+      }
     }
 
     // X (Twitter) pages: the timeline is virtualised and Readability keeps at

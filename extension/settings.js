@@ -32,6 +32,18 @@ const SettingsUtils = (function() {
       // 'all' — a two-year-old thread can be tens of thousands of messages,
       // and copying it whole is a good way to hang the tab.
       chatExchangeLimit: 10,
+      // GitHub-aware extraction: builds a repository page from the REST API —
+      // heading, description, the README as its original Markdown, and the
+      // whole file tree. The rendered page cannot give either: its README is
+      // HTML compiled from Markdown, and its file list is one level deep.
+      githubMode: true,
+      // Whether the capture carries the README.
+      githubIncludeReadme: true,
+      // Whether the capture carries the recursive file tree.
+      githubIncludeTree: true,
+      // Ceiling on tree entries; 'all' means no cap. A monorepo can hold six
+      // figures of paths, which is not a thing to paste into a model.
+      githubMaxTreeEntries: 1000,
       // X-aware extraction: renders the thread (post + replies) or the timeline
       // by walking the virtualised list instead of the first visible post only.
       xMode: true,
